@@ -1,0 +1,307 @@
+name: Homologar e publicar (sem custo, só manual)
+
+# Roda NO REPOSITÓRIO PÚBLICO AnaPLysyk/Prumo-QA-Releases, cujos runners padrão são gratuitos, enquanto o Actions do repositório
+# privado AnaPLysyk/Prumo-Qa estiver bloqueado pelo limite de gastos. O código-fonte NÃO é copiado para cá:
+#   - os dois checkouts (Prumo QA e Prumo QA Lab) usam commits imutáveis (SHA de 40 caracteres) e o segredo PRUMO_LEITURA_TOKEN,
+#     um token de acesso restrito com somente "Contents: Read" nesses dois repositórios; o token não é gravado no checkout;
+#   - o log deste repositório é PÚBLICO: nenhum comando que roda código privado escreve no console. A saída completa vai para um
+#     arquivo; o console recebe só o resumo seguro (rótulo, PASS/FAIL, contagens e nome dos testes). O log completo só sai como
+#     artefato CIFRADO (AES-256-GCM, segredo PRUMO_LOG_SENHA), e só em falha;
+#   - só dispara à mão (workflow_dispatch), só pelo dono do repositório, nunca por PR, push ou fork (forks não recebem segredos).
+# Os comandos são os mesmos dos workflows windows.yml e multiplataforma.yml do repositório privado (gate-windows.ps1, gate-unix.sh).
+# A publicação é uma segunda execução (publicar=true): exige a tag vX.Y.Z já criada no repositório privado, no commit validado da
+# main, a confirmação digitada e a aprovação do ambiente "publicacao". Instaladores vão para uma release em RASCUNHO (invisível ao
+# público) e só são publicados depois que os cinco passaram e foram conferidos. Os artefatos do Actions NÃO levam instaladores.
+on:
+  workflow_dispatch:
+    inputs:
+      codigo_sha:
+        description: 'Commit do Prumo QA (40 caracteres hexadecimais), contido na branch confiável'
+        required: true
+      lab_sha:
+        description: 'Commit do Prumo QA Lab (40 caracteres hexadecimais)'
+        required: true
+        default: '67d4cd574a3b732147f261c7ce27f89b4e0c6155'
+      versao:
+        description: 'Versão do package.json no commit (X.Y.Z)'
+        required: true
+      ramo_confiavel:
+        description: 'Branch do repositório privado que contém o commit (publicar exige main)'
+        required: true
+        default: 'prumo/homologacao-e2e-agentes'
+      publicar:
+        description: 'Publicar a release depois de aprovada (exige tag no privado, confirmação e aprovação do ambiente)'
+        type: boolean
+        default: false
+      confirmacao:
+        description: 'Para publicar, digite exatamente: PUBLICAR vX.Y.Z'
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homologar-e-publicar
+  cancel-in-progress: false
+
+env:
+  PRUMO_LOGS_PRIVADOS: ${{ runner.temp }}/logs-privados
+
+jobs:
+  entrada:
+    name: Conferir a entrada
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar commits, versão e (para publicar) tag e confirmação
+        env:
+          CODIGO_SHA: ${{ inputs.codigo_sha }}
+          LAB_SHA: ${{ inputs.lab_sha }}
+          VERSAO: ${{ inputs.versao }}
+          RAMO: ${{ inputs.ramo_confiavel }}
+          PUBLICAR: ${{ inputs.publicar }}
+          CONFIRMACAO: ${{ inputs.confirmacao }}
+          TOKEN: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+        run: |
+          set -euo pipefail
+          [[ "$CODIGO_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::codigo_sha precisa ter 40 caracteres hexadecimais minúsculos."; exit 1; }
+          [[ "$LAB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::lab_sha precisa ter 40 caracteres hexadecimais minúsculos."; exit 1; }
+          [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::versao deve ser X.Y.Z."; exit 1; }
+          [[ "$RAMO" =~ ^(main|prumo/homologacao-[A-Za-z0-9._-]+|release-[0-9.]+)$ ]] || { echo "::error::Branch confiável não permitida."; exit 1; }
+          [ -n "$TOKEN" ] || { echo "::error::Falta o segredo PRUMO_LEITURA_TOKEN (acesso de leitura ao Prumo QA e ao Prumo QA Lab)."; exit 1; }
+          # Só o código de resposta e o campo de estado são exibidos; o corpo das respostas (repositório privado) nunca vai ao log.
+          consultar() { curl -s -o "$RUNNER_TEMP/resposta.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$1"; }
+          [ "$(consultar "AnaPLysyk/Prumo-QA-Lab/commits/$LAB_SHA")" = 200 ] || { echo "::error::Commit do Lab não encontrado ou sem permissão de leitura."; exit 1; }
+          [ "$(consultar "AnaPLysyk/Prumo-Qa/compare/$CODIGO_SHA...$RAMO")" = 200 ] || { echo "::error::Não foi possível comparar o commit com a branch confiável."; exit 1; }
+          situacao=$(jq -r .status "$RUNNER_TEMP/resposta.json")
+          [[ "$situacao" == ahead || "$situacao" == identical ]] || { echo "::error::O commit $CODIGO_SHA não pertence à branch $RAMO (situação: $situacao)."; exit 1; }
+          echo "Commit do Prumo QA e do Lab conferidos."
+          if [ "$PUBLICAR" = true ]; then
+            [ "$RAMO" = main ] || { echo "::error::Publicar exige ramo_confiavel=main (commit já integrado)."; exit 1; }
+            [ "$CONFIRMACAO" = "PUBLICAR v$VERSAO" ] || { echo "::error::Confirmação diferente de 'PUBLICAR v$VERSAO'."; exit 1; }
+            [ "$(consultar "AnaPLysyk/Prumo-Qa/git/ref/tags/v$VERSAO")" = 200 ] || { echo "::error::A tag v$VERSAO não existe no repositório privado."; exit 1; }
+            tipo=$(jq -r .object.type "$RUNNER_TEMP/resposta.json"); alvo=$(jq -r .object.sha "$RUNNER_TEMP/resposta.json")
+            if [ "$tipo" = tag ]; then
+              [ "$(consultar "AnaPLysyk/Prumo-Qa/git/tags/$alvo")" = 200 ] || { echo "::error::Tag anotada ilegível."; exit 1; }
+              alvo=$(jq -r .object.sha "$RUNNER_TEMP/resposta.json")
+            fi
+            [ "$alvo" = "$CODIGO_SHA" ] || { echo "::error::A tag v$VERSAO não aponta para o commit validado."; exit 1; }
+            echo "Tag v$VERSAO aponta para o commit validado."
+          fi
+
+  rascunho:
+    name: Release em rascunho
+    needs: entrada
+    if: inputs.publicar
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSAO: ${{ inputs.versao }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: publico
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: AnaPLysyk/Prumo-Qa
+          ref: ${{ inputs.codigo_sha }}
+          token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+          persist-credentials: false
+          path: codigo
+          sparse-checkout: |
+            docs/catalogo
+            site/release
+            package.json
+      - name: Criar (ou reaproveitar) o rascunho da release
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSAO" --json isDraft --jq .isDraft >"$RUNNER_TEMP/rascunho.txt" 2>/dev/null; then
+            [ "$(cat "$RUNNER_TEMP/rascunho.txt")" = true ] || { echo "::error::A release v$VERSAO já está publicada: nunca é alterada."; exit 1; }
+            echo "Rascunho v$VERSAO já existe; será reaproveitado."
+          else
+            # Sem certificado de assinatura no canal público: as notas dizem "NÃO ASSINADO" (PRUMO_ASSINADO só é true com Authenticode válido).
+            (cd codigo && PRUMO_ASSINADO=false node site/release/notas-versao.mjs "$VERSAO") > "$RUNNER_TEMP/notas.md"
+            gh release create "v$VERSAO" --draft --target main --title "Prumo QA $VERSAO" --notes-file "$RUNNER_TEMP/notas.md"
+          fi
+
+  gate-windows:
+    name: Windows
+    needs: [entrada, rascunho]
+    if: ${{ !cancelled() && needs.entrada.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.rascunho.result) }}
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    env:
+      VERSAO: ${{ inputs.versao }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: publico
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: AnaPLysyk/Prumo-Qa
+          ref: ${{ inputs.codigo_sha }}
+          token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+          persist-credentials: false
+          path: codigo
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: AnaPLysyk/Prumo-QA-Lab
+          ref: ${{ inputs.lab_sha }}
+          token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+          persist-credentials: false
+          path: codigo/tmp/lab
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Conferir a versão do commit
+        shell: bash
+        run: '[ "$(node -p "require(''./codigo/package.json'').version")" = "$VERSAO" ] || { echo "::error::package.json do commit não está na versão $VERSAO."; exit 1; }'
+      - name: Gate do Windows (unitários, smoke, integração, E2E, regressão, instalador e pacote final)
+        shell: pwsh
+        working-directory: codigo
+        run: ../publico/.github/scripts/gate-windows.ps1
+      - name: Guardar os logs privados cifrados (só em falha)
+        if: failure()
+        shell: bash
+        env:
+          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+        run: |
+          cp -r codigo/tmp/diagnostico-e2e "$PRUMO_LOGS_PRIVADOS/" 2>/dev/null || true
+          (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
+          node publico/.github/scripts/cifrar-logs.mjs cifrar "$RUNNER_TEMP/privado.tgz" "$RUNNER_TEMP/privado.enc"
+      - name: Enviar os logs cifrados
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: logs-cifrados-windows
+          path: ${{ runner.temp }}/privado.enc
+          if-no-files-found: ignore
+          retention-days: 1
+      - name: Anexar o instalador ao rascunho (só ao publicar)
+        if: inputs.publicar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "v$VERSAO" codigo/release/Prumo-QA-Setup-*.exe codigo/release/Prumo-QA-Setup-*.exe.sha256 --clobber
+
+  gate-unix:
+    name: ${{ matrix.nome }}
+    needs: [entrada, rascunho]
+    if: ${{ !cancelled() && needs.entrada.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.rascunho.result) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { nome: 'macOS (Apple Silicon)', os: macos-latest, alvo: mac }
+          - { nome: 'macOS (Intel)', os: macos-15-intel, alvo: mac }
+          - { nome: 'Linux', os: ubuntu-latest, alvo: linux }
+    env:
+      VERSAO: ${{ inputs.versao }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: publico
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: AnaPLysyk/Prumo-Qa
+          ref: ${{ inputs.codigo_sha }}
+          token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+          persist-credentials: false
+          path: codigo
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: AnaPLysyk/Prumo-QA-Lab
+          ref: ${{ inputs.lab_sha }}
+          token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
+          persist-credentials: false
+          path: codigo/tmp/lab
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Conferir a versão do commit
+        run: '[ "$(node -p "require(''./codigo/package.json'').version")" = "$VERSAO" ] || { echo "::error::package.json do commit não está na versão $VERSAO."; exit 1; }'
+      - name: Gate (testes, instaladores e pacotes finais)
+        working-directory: codigo
+        run: bash ../publico/.github/scripts/gate-unix.sh ${{ matrix.alvo }}
+      - name: Guardar os logs privados cifrados (só em falha)
+        if: failure()
+        env:
+          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+        run: |
+          cp -r codigo/tmp/diagnostico-e2e "$PRUMO_LOGS_PRIVADOS/" 2>/dev/null || true
+          (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
+          node publico/.github/scripts/cifrar-logs.mjs cifrar "$RUNNER_TEMP/privado.tgz" "$RUNNER_TEMP/privado.enc"
+      - name: Enviar os logs cifrados
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: logs-cifrados-${{ matrix.alvo }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/privado.enc
+          if-no-files-found: ignore
+          retention-days: 1
+      # Cada arquivo publicado é o mesmo que um runner da própria arquitetura instalou, abriu e testou: o .dmg arm64 vem do Apple
+      # Silicon, o .dmg x64 do Intel, e os dois de Linux do Ubuntu.
+      - name: Anexar os instaladores ao rascunho (só ao publicar)
+        if: inputs.publicar
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ matrix.alvo }}" = mac ]; then
+            arq=$(node -p process.arch)
+            gh release upload "v$VERSAO" codigo/release/Prumo-QA-*-mac-$arq.dmg codigo/release/Prumo-QA-*-mac-$arq.dmg.sha256 --clobber
+          else
+            gh release upload "v$VERSAO" codigo/release/Prumo-QA-*-linux-*.AppImage codigo/release/Prumo-QA-*-linux-*.AppImage.sha256 codigo/release/Prumo-QA-*-linux-*.deb codigo/release/Prumo-QA-*-linux-*.deb.sha256 --clobber
+          fi
+
+  publicar:
+    name: Publicar a release (aprovação do ambiente)
+    needs: [entrada, gate-windows, gate-unix]
+    if: ${{ inputs.publicar && needs.gate-windows.result == 'success' && needs.gate-unix.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: publicacao
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSAO: ${{ inputs.versao }}
+    steps:
+      - name: Conferir os cinco instaladores e os checksums no rascunho
+        run: |
+          set -euo pipefail
+          gh release view "v$VERSAO" --json isDraft,assets --jq '.isDraft, (.assets[].name)' > "$RUNNER_TEMP/ativos.txt"
+          [ "$(head -1 "$RUNNER_TEMP/ativos.txt")" = true ] || { echo "::error::A release v$VERSAO não está em rascunho."; exit 1; }
+          for padrao in "^Prumo-QA-Setup-$VERSAO\.exe$" "^Prumo-QA-$VERSAO-mac-arm64\.dmg$" "^Prumo-QA-$VERSAO-mac-x64\.dmg$" "^Prumo-QA-$VERSAO-linux-.*\.AppImage$" "^Prumo-QA-$VERSAO-linux-.*\.deb$"; do
+            for sufixo in '' '\.sha256'; do
+              grep -Eq "${padrao%\$}$sufixo\$" "$RUNNER_TEMP/ativos.txt" || { echo "::error::Faltou no rascunho: ${padrao%\$}$sufixo"; exit 1; }
+            done
+          done
+          echo "Os dez arquivos (cinco instaladores e cinco checksums) estão no rascunho."
+      - name: Publicar a release
+        run: gh release edit "v$VERSAO" --draft=false --latest
+      - name: Conferir os downloads públicos (sem autenticação) e o SHA-256
+        run: |
+          set -euo pipefail
+          { echo "### Downloads públicos de v$VERSAO"; echo; echo '| Arquivo | SHA-256 |'; echo '|---|---|'; } >> "$GITHUB_STEP_SUMMARY"
+          for nome in $(grep -E '^Prumo-QA-.*\.(exe|dmg|AppImage|deb)$' "$RUNNER_TEMP/ativos.txt"); do
+            url="https://github.com/$GH_REPO/releases/download/v$VERSAO/$nome"
+            curl --fail --location --retry 3 --retry-all-errors -sS "$url" -o "$RUNNER_TEMP/$nome"
+            curl --fail --location --retry 3 --retry-all-errors -sS "$url.sha256" -o "$RUNNER_TEMP/$nome.sha256"
+            hash=$(sha256sum "$RUNNER_TEMP/$nome" | cut -d' ' -f1)
+            [ "$hash" = "$(cut -d' ' -f1 "$RUNNER_TEMP/$nome.sha256")" ] || { echo "::error::O download público de $nome difere do checksum publicado."; exit 1; }
+            echo "| $nome | \`$hash\` |" >> "$GITHUB_STEP_SUMMARY"
+          done
