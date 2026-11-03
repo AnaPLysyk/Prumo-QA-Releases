@@ -1,7 +1,7 @@
 # Prumo QA / instaladores oficiais
 
-Este repositorio distribui os instaladores e os arquivos SHA-256 do Prumo QA. O c?digo-fonte permanece em um reposit?rio privado separado.
+Este repositorio distribui os instaladores e os arquivos SHA-256 do Prumo QA. O codigo-fonte permanece em um repositorio privado separado.
 
-Baixe os instaladores pela [p?gina de releases](https://github.com/AnaPLysyk/Prumo-QA-Releases/releases) ou pelo [site oficial](https://prumo-qa-docs.onrender.com/).
+Baixe os instaladores pela [pagina de releases](https://github.com/AnaPLysyk/Prumo-QA-Releases/releases) ou pelo [site oficial](https://prumo-qa-docs.onrender.com/).
 
-Confira o SHA-256 antes de instalar. O checksum verifica integridade; o estado de assinatura ? informado nas notas de cada vers?o.
+Confira o SHA-256 antes de instalar. O checksum verifica integridade; o estado de assinatura informado nas notas de cada versão.
