@@ -44,9 +44,6 @@ concurrency:
   group: homologar-e-publicar
   cancel-in-progress: false
 
-env:
-  PRUMO_LOGS_PRIVADOS: ${{ runner.temp }}/logs-privados
-
 jobs:
   entrada:
     name: Conferir a entrada
@@ -173,7 +170,7 @@ jobs:
         env:
           PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
         run: |
-          cp -r codigo/tmp/diagnostico-e2e "$PRUMO_LOGS_PRIVADOS/" 2>/dev/null || true
+          cp -r codigo/tmp/diagnostico-e2e "$RUNNER_TEMP/logs-privados/" 2>/dev/null || true
           (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
           node publico/.github/scripts/cifrar-logs.mjs cifrar "$RUNNER_TEMP/privado.tgz" "$RUNNER_TEMP/privado.enc"
       - name: Enviar os logs cifrados
@@ -241,7 +238,7 @@ jobs:
         env:
           PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
         run: |
-          cp -r codigo/tmp/diagnostico-e2e "$PRUMO_LOGS_PRIVADOS/" 2>/dev/null || true
+          cp -r codigo/tmp/diagnostico-e2e "$RUNNER_TEMP/logs-privados/" 2>/dev/null || true
           (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
           node publico/.github/scripts/cifrar-logs.mjs cifrar "$RUNNER_TEMP/privado.tgz" "$RUNNER_TEMP/privado.enc"
       - name: Enviar os logs cifrados
