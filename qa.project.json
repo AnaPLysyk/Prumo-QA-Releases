@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "id": "prumo-qa-releases",
+  "name": "Prumo-QA-Releases",
+  "context": {
+    "documentation": [
+      "README.md"
+    ],
+    "tests": [],
+    "code": []
+  },
+  "commands": {},
+  "execution": {
+    "requireApproval": true,
+    "blockedByDefault": [],
+    "environment": "host",
+    "readOnly": true,
+    "envAllowlist": [],
+    "timeoutMs": 300000,
+    "maxOutputBytes": 1048576
+  }
+}
