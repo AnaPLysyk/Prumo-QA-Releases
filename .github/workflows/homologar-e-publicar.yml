@@ -68,7 +68,9 @@ jobs:
           [ -n "$TOKEN" ] || { echo "::error::Falta o segredo PRUMO_LEITURA_TOKEN (acesso de leitura ao Prumo QA e ao Prumo QA Lab)."; exit 1; }
           # Só o código de resposta e o campo de estado são exibidos; o corpo das respostas (repositório privado) nunca vai ao log.
           consultar() { curl -s -o "$RUNNER_TEMP/resposta.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$1"; }
-          [ "$(consultar "AnaPLysyk/Prumo-QA-Lab/commits/$LAB_SHA")" = 200 ] || { echo "::error::Commit do Lab não encontrado ou sem permissão de leitura."; exit 1; }
+          [ "$(consultar "AnaPLysyk/Prumo-QA-Lab/compare/$LAB_SHA...main")" = 200 ] || { echo "::error::Commit do Lab não encontrado ou sem permissão de leitura."; exit 1; }
+          situacao_lab=$(jq -r .status "$RUNNER_TEMP/resposta.json")
+          [[ "$situacao_lab" == ahead || "$situacao_lab" == identical ]] || { echo "::error::O commit do Lab não pertence à main do Lab (situação: $situacao_lab)."; exit 1; }
           [ "$(consultar "AnaPLysyk/Prumo-Qa/compare/$CODIGO_SHA...$RAMO")" = 200 ] || { echo "::error::Não foi possível comparar o commit com a branch confiável."; exit 1; }
           situacao=$(jq -r .status "$RUNNER_TEMP/resposta.json")
           [[ "$situacao" == ahead || "$situacao" == identical ]] || { echo "::error::O commit $CODIGO_SHA não pertence à branch $RAMO (situação: $situacao)."; exit 1; }
