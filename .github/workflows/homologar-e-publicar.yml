@@ -111,10 +111,17 @@ jobs:
           token: ${{ secrets.PRUMO_LEITURA_TOKEN }}
           persist-credentials: false
           path: codigo
-          sparse-checkout: |
-            docs/catalogo
-            site/release
-            package.json
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      # notas-versao.mjs importa dist/ajuda/servicoAjuda.js (saída de build): sem compilar, a criação do rascunho falha com ERR_MODULE_NOT_FOUND.
+      - name: Compilar o código validado (o gerador das notas lê o dist)
+        working-directory: codigo
+        run: |
+          set -euo pipefail
+          npm ci
+          npm ci --prefix backend/login/servidor --omit=dev
+          npm run build
       - name: Criar (ou reaproveitar) o rascunho da release
         run: |
           set -euo pipefail
