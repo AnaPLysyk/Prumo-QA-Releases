@@ -15,10 +15,13 @@ sessao() {
 }
 
 if [ "$alvo" = "linux" ]; then
-  sudo apt-get update >/dev/null
-  sudo apt-get install -y xvfb libsecret-1-0 gnome-keyring dbus-x11 zenity policykit-1 libfuse2 rpm fakeroot dpkg >/dev/null
+  sudo apt-get update >/dev/null || exit $?
+  sudo apt-get install -y xvfb libsecret-1-0 gnome-keyring dbus-x11 zenity polkitd pkexec libfuse2 rpm fakeroot dpkg >/dev/null || exit $?
+  for binario in dbus-run-session gnome-keyring-daemon xvfb-run pkexec; do
+    command -v "$binario" >/dev/null || { echo "faltando $binario depois do apt: o gate de janela não pode rodar"; exit 1; }
+  done
   # Ubuntu 24.04 restringe namespaces sem privilégio (AppArmor) e o sandbox do Chromium não abre a janela sem eles.
-  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null
+  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 >/dev/null || exit $?
 fi
 
 executar 'npm ci' npm-ci 'npm ci'
