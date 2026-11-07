@@ -11,13 +11,13 @@ const [arquivo, rotulo = 'Etapa', codigoTexto = '1'] = process.argv.slice(2);
 const codigo = Number(codigoTexto);
 const linhas = fs.existsSync(arquivo) ? fs.readFileSync(arquivo, 'utf8').split(/\r?\n/) : [];
 const contar = (nome) => {
-  const encontrado = linhas.map((l) => new RegExp(`^# ${nome} (\\d+)\\s*$`).exec(l)).filter(Boolean).pop();
-  return encontrado ? Number(encontrado[1]) : null;
+  const valores = linhas.map((l) => new RegExp(`^# ${nome} (\\d+)\\s*$`).exec(l)).filter(Boolean).map((m) => Number(m[1]));
+  return valores.length ? valores.reduce((a, b) => a + b, 0) : null;
 };
 const seguro = (texto) => texto.replace(/[\r\n%]/g, ' ').replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>').slice(0, 160);
 const falhas = linhas.map((l) => /^\s*not ok \d+ - (.+)$/.exec(l)).filter(Boolean).map((m) => seguro(m[1])).slice(0, 15);
 const partes = [`${rotulo}: ${codigo === 0 ? 'PASS' : 'FAIL'} (código ${codigo})`];
-for (const nome of ['tests', 'pass', 'fail', 'skipped']) {
+for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled']) {
   const valor = contar(nome);
   if (valor !== null) partes.push(`${nome}=${valor}`);
 }
