@@ -21,7 +21,7 @@ on:
       lab_sha:
         description: 'Commit do Prumo QA Lab (40 caracteres hexadecimais)'
         required: true
-        default: 'bcb211023f4a7f4dcac65c6b76bd90e8a7f2b5b9'
+        default: '95319e82c25dd8ca2bf89e33ac4adcbb1540267d'
       versao:
         description: 'Versão do package.json no commit (X.Y.Z)'
         required: true
