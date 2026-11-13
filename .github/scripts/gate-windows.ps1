@@ -1,4 +1,4 @@
-# Gate do Windows no repositório PÚBLICO de distribuição: os mesmos comandos de .github/workflows/windows.yml do repositório privado
+# Gate canônico do Windows no repositório PÚBLICO de distribuição
 # (unitários, smoke, integração, E2E, regressão, instalador NSIS, executável empacotado e validação do instalador final), cada um
 # com a saída fora do log público (executar-silencioso.mjs). Roda dentro da pasta "codigo" (checkout do commit privado imutável).
 $ErrorActionPreference = 'Stop'
@@ -13,6 +13,7 @@ Executar 'Runtime Electron' electron-install 'node node_modules/electron/install
 Executar 'Dependências do servidor Better Auth' better-auth 'npm ci --prefix backend/login/servidor --omit=dev'
 Executar 'Compilação' build 'npm run build'
 Executar 'Testes unitários' unitarios 'npm run test:unitarios'
+Executar 'Quality do Prumo (regras e agentes, sem repetir unitários)' quality-ci 'npm run qualidade:ci'
 
 # O Windows do Actions não tem GPU: os testes de janela rodam com "reduzir movimento" (docs/RELEASE.md); os demais, em modo normal.
 foreach ($tipo in 'smoke', 'integracao', 'e2e', 'regressao') {

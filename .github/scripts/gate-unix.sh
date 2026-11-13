@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Gate de macOS (arm64 e Intel) e Linux no repositório PÚBLICO de distribuição: os mesmos comandos de
-# .github/workflows/multiplataforma.yml do repositório privado (smoke, integração, E2E, instaladores, executável empacotado e
+# Gate canônico de macOS (arm64 e Intel) e Linux no repositório PÚBLICO de distribuição: smoke, integração, E2E,
+# instaladores, executável empacotado e
 # validação dos pacotes finais), cada um com a saída fora do log público (executar-silencioso.mjs).
 # Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux
 set -uo pipefail
@@ -29,6 +29,7 @@ executar 'Runtime Electron' electron-install 'node node_modules/electron/install
 executar 'Dependências do servidor Better Auth' better-auth 'npm ci --prefix backend/login/servidor --omit=dev'
 executar 'Tipos' typecheck 'npm run typecheck'
 executar 'Compilação' build 'npm run build'
+executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci 'npm run qualidade:ci'
 executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
 executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
 for tipo in smoke integracao e2e; do

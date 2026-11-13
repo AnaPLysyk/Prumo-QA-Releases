@@ -8,7 +8,7 @@ name: Homologar e publicar (sem custo, só manual)
 #     arquivo; o console recebe só o resumo seguro (rótulo, PASS/FAIL, contagens e nome dos testes). O log completo só sai como
 #     artefato CIFRADO (AES-256-GCM, segredo PRUMO_LOG_SENHA), e só em falha;
 #   - só dispara à mão (workflow_dispatch), só pelo dono do repositório, nunca por PR, push ou fork (forks não recebem segredos).
-# Os comandos são os mesmos dos workflows windows.yml e multiplataforma.yml do repositório privado (gate-windows.ps1, gate-unix.sh).
+# gate-windows.ps1 e gate-unix.sh são a fonte canônica da homologação multiplataforma; o CI privado faz só o retorno rápido de desenvolvimento.
 # A publicação é uma segunda execução (publicar=true): exige a tag vX.Y.Z já criada no repositório privado, no commit validado da
 # main, a confirmação digitada e a aprovação do ambiente "publicacao". Instaladores vão para uma release em RASCUNHO (invisível ao
 # público) e só são publicados depois que os cinco passaram e foram conferidos. Os artefatos do Actions NÃO levam instaladores.
@@ -21,14 +21,12 @@ on:
       lab_sha:
         description: 'Commit do Prumo QA Lab (40 caracteres hexadecimais)'
         required: true
-        default: '3b164f23c60e8d52b265ed0a1bbbbdc31273f79c'
       versao:
         description: 'Versão do package.json no commit (X.Y.Z)'
         required: true
       ramo_confiavel:
         description: 'Branch do repositório privado que contém o commit (publicar exige main)'
         required: true
-        default: 'prumo/homologacao-e2e-agentes'
       publicar:
         description: 'Publicar a release depois de aprovada (exige tag no privado, confirmação e aprovação do ambiente)'
         type: boolean
