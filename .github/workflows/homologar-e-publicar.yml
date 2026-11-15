@@ -21,6 +21,10 @@ on:
       lab_sha:
         description: 'Commit do Prumo QA Lab (40 caracteres hexadecimais)'
         required: true
+      lab_ramo_confiavel:
+        description: 'Branch do Lab que contém o commit; publicar exige main'
+        required: true
+        default: main
       versao:
         description: 'Versão do package.json no commit (X.Y.Z)'
         required: true
@@ -52,6 +56,7 @@ jobs:
         env:
           CODIGO_SHA: ${{ inputs.codigo_sha }}
           LAB_SHA: ${{ inputs.lab_sha }}
+          LAB_RAMO: ${{ inputs.lab_ramo_confiavel }}
           VERSAO: ${{ inputs.versao }}
           RAMO: ${{ inputs.ramo_confiavel }}
           PUBLICAR: ${{ inputs.publicar }}
@@ -62,19 +67,21 @@ jobs:
           [[ "$CODIGO_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::codigo_sha precisa ter 40 caracteres hexadecimais minúsculos."; exit 1; }
           [[ "$LAB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::lab_sha precisa ter 40 caracteres hexadecimais minúsculos."; exit 1; }
           [[ "$VERSAO" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::versao deve ser X.Y.Z."; exit 1; }
-          [[ "$RAMO" =~ ^(main|prumo/homologacao-[A-Za-z0-9._-]+|release-[0-9.]+)$ ]] || { echo "::error::Branch confiável não permitida."; exit 1; }
+          [[ "$RAMO" =~ ^(main|prumo/homologacao-[A-Za-z0-9._-]+|release-[0-9.]+)$ ]] || { echo "::error::Branch confiável do Prumo não permitida."; exit 1; }
+          [[ "$LAB_RAMO" =~ ^(main|lab/[A-Za-z0-9._-]+)$ ]] || { echo "::error::Branch confiável do Lab não permitida."; exit 1; }
           [ -n "$TOKEN" ] || { echo "::error::Falta o segredo PRUMO_LEITURA_TOKEN (acesso de leitura ao Prumo QA e ao Prumo QA Lab)."; exit 1; }
           # Só o código de resposta e o campo de estado são exibidos; o corpo das respostas (repositório privado) nunca vai ao log.
           consultar() { curl -s -o "$RUNNER_TEMP/resposta.json" -w '%{http_code}' -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$1"; }
-          [ "$(consultar "AnaPLysyk/Prumo-QA-Lab/compare/$LAB_SHA...main")" = 200 ] || { echo "::error::Commit do Lab não encontrado ou sem permissão de leitura."; exit 1; }
+          [ "$(consultar "AnaPLysyk/Prumo-QA-Lab/compare/$LAB_SHA...$LAB_RAMO")" = 200 ] || { echo "::error::Commit do Lab não encontrado na branch $LAB_RAMO ou sem permissão de leitura."; exit 1; }
           situacao_lab=$(jq -r .status "$RUNNER_TEMP/resposta.json")
-          [[ "$situacao_lab" == ahead || "$situacao_lab" == identical ]] || { echo "::error::O commit do Lab não pertence à main do Lab (situação: $situacao_lab)."; exit 1; }
+          [[ "$situacao_lab" == ahead || "$situacao_lab" == identical ]] || { echo "::error::O commit do Lab não pertence à branch $LAB_RAMO (situação: $situacao_lab)."; exit 1; }
           [ "$(consultar "AnaPLysyk/Prumo-Qa/compare/$CODIGO_SHA...$RAMO")" = 200 ] || { echo "::error::Não foi possível comparar o commit com a branch confiável."; exit 1; }
           situacao=$(jq -r .status "$RUNNER_TEMP/resposta.json")
           [[ "$situacao" == ahead || "$situacao" == identical ]] || { echo "::error::O commit $CODIGO_SHA não pertence à branch $RAMO (situação: $situacao)."; exit 1; }
           echo "Commit do Prumo QA e do Lab conferidos."
           if [ "$PUBLICAR" = true ]; then
             [ "$RAMO" = main ] || { echo "::error::Publicar exige ramo_confiavel=main (commit já integrado)."; exit 1; }
+            [ "$LAB_RAMO" = main ] || { echo "::error::Publicar exige lab_ramo_confiavel=main (commit já integrado)."; exit 1; }
             [ "$CONFIRMACAO" = "PUBLICAR v$VERSAO" ] || { echo "::error::Confirmação diferente de 'PUBLICAR v$VERSAO'."; exit 1; }
             [ "$(consultar "AnaPLysyk/Prumo-Qa/git/ref/tags/v$VERSAO")" = 200 ] || { echo "::error::A tag v$VERSAO não existe no repositório privado."; exit 1; }
             tipo=$(jq -r .object.type "$RUNNER_TEMP/resposta.json"); alvo=$(jq -r .object.sha "$RUNNER_TEMP/resposta.json")
@@ -113,13 +120,13 @@ jobs:
         with:
           node-version: 24
       # notas-versao.mjs importa dist/ajuda/servicoAjuda.js (saída de build): sem compilar, a criação do rascunho falha com ERR_MODULE_NOT_FOUND.
-      - name: Compilar o código validado (o gerador das notas lê o dist)
+      - name: Compilar o código validado sem expor a saída privada no log público
         working-directory: codigo
         run: |
           set -euo pipefail
-          npm ci
-          npm ci --prefix backend/login/servidor --omit=dev
-          npm run build
+          node ../publico/.github/scripts/executar-silencioso.mjs 'Dependências do Prumo' npm-ci 'npm ci'
+          node ../publico/.github/scripts/executar-silencioso.mjs 'Dependências do servidor Better Auth' better-auth 'npm ci --prefix backend/login/servidor --omit=dev'
+          node ../publico/.github/scripts/executar-silencioso.mjs 'Build do Prumo' build 'npm run build'
       - name: Criar (ou reaproveitar) o rascunho da release
         run: |
           set -euo pipefail
@@ -128,9 +135,27 @@ jobs:
             echo "Rascunho v$VERSAO já existe; será reaproveitado."
           else
             # Sem certificado de assinatura no canal público: as notas dizem "NÃO ASSINADO" (PRUMO_ASSINADO só é true com Authenticode válido).
-            (cd codigo && PRUMO_ASSINADO=false node site/release/notas-versao.mjs "$VERSAO") > "$RUNNER_TEMP/notas.md"
+            node publico/.github/scripts/executar-silencioso.mjs 'Gerar notas da release' notas-versao "cd codigo && PRUMO_ASSINADO=false node site/release/notas-versao.mjs \"$VERSAO\" > \"$RUNNER_TEMP/notas.md\""
             gh release create "v$VERSAO" --draft --target main --title "Prumo QA $VERSAO" --notes-file "$RUNNER_TEMP/notas.md"
           fi
+      - name: Guardar os logs privados cifrados (só em falha)
+        if: failure()
+        env:
+          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+        run: |
+          set -euo pipefail
+          if [ -d "$RUNNER_TEMP/logs-privados" ]; then
+            tar -czf "$RUNNER_TEMP/rascunho-privado.tgz" -C "$RUNNER_TEMP" logs-privados
+            node publico/.github/scripts/cifrar-logs.mjs cifrar "$RUNNER_TEMP/rascunho-privado.tgz" "$RUNNER_TEMP/rascunho-privado.enc"
+          fi
+      - name: Enviar os logs cifrados
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: logs-cifrados-rascunho
+          path: ${{ runner.temp }}/rascunho-privado.enc
+          if-no-files-found: ignore
+          retention-days: 1
 
   gate-windows:
     name: Windows
