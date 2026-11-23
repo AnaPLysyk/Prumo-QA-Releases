@@ -14,6 +14,7 @@ Executar 'Dependências do servidor Better Auth' better-auth 'npm ci --prefix ba
 Executar 'Compilação' build 'npm run build'
 Executar 'Testes unitários' unitarios 'npm run test:unitarios'
 Executar 'Quality do Prumo (regras e agentes, sem repetir unitários)' quality-ci 'npm run qualidade:ci'
+Executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
 
 # O Windows do Actions não tem GPU: os testes de janela rodam com "reduzir movimento" (docs/RELEASE.md); os demais, em modo normal.
 foreach ($tipo in 'smoke', 'integracao', 'e2e', 'regressao') {

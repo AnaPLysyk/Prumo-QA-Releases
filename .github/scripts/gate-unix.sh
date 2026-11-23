@@ -31,6 +31,7 @@ executar 'Tipos' typecheck 'npm run typecheck'
 executar 'Compilação' build 'npm run build'
 executar 'Testes unitários' unitarios 'npm run test:unitarios'
 executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci 'npm run qualidade:ci'
+executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
 executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
 executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
 for tipo in smoke integracao e2e; do
