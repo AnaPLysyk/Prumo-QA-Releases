@@ -155,7 +155,7 @@ jobs:
           name: logs-cifrados-rascunho
           path: ${{ runner.temp }}/rascunho-privado.enc
           if-no-files-found: ignore
-          retention-days: 1
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
 
   gate-windows:
     name: Windows
