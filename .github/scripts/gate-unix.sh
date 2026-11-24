@@ -3,10 +3,27 @@
 # instaladores, executável empacotado e
 # validação dos pacotes finais), cada um com a saída fora do log público (executar-silencioso.mjs).
 # Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux
-set -uo pipefail
+set -euo pipefail
 alvo="${1:?Uso: gate-unix.sh mac|linux}"
 silencioso="$GITHUB_WORKSPACE/publico/.github/scripts/executar-silencioso.mjs"
-executar() { node "$silencioso" "$1" "$2" "$3" || exit $?; }
+resumo="$GITHUB_WORKSPACE/publico/.github/scripts/resumo-seguro.mjs"
+arquivo_bloqueio_claude="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-e2e-blocked"
+executar() {
+  local rotulo="$1" log="$2" comando="$3" codigo=0
+  node "$silencioso" "$rotulo" "$log" "$comando" || codigo=$?
+  if [[ "$rotulo" == Lab\ e2e\ \(* ]] && [ -n "${PRUMO_RESULT_FILE:-}" ]; then
+    local validacao=1
+    node "$resumo" --validar-resultado "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION" "$VERSAO" "$CODIGO_SHA" "$LAB_SHA" "$(node -p 'process.platform + "-" + process.arch')" "$PRUMO_JOB_ID" || validacao=$?
+    if [ "$codigo" -eq 0 ] && [ "$validacao" -eq 0 ]; then return 0; fi
+    if [ "$codigo" -eq 3 ] && [ "$validacao" -eq 3 ]; then
+      printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"
+      echo "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+      return 0
+    fi
+    if [ "$codigo" -eq 0 ]; then return 1; fi
+  fi
+  return "$codigo"
+}
 # Linux: janela no Xvfb e cofre do GNOME destravado numa sessão D-Bus própria, como numa área de trabalho real.
 sessao() {
   if [ "$alvo" = "linux" ]; then
@@ -34,8 +51,14 @@ executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci '
 executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
 executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
 executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
-for tipo in smoke integracao e2e; do
+for tipo in smoke integracao e2e regressao; do
+  if [ "$tipo" = e2e ]; then
+    export PRUMO_RESULT_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lab-e2e-result-${alvo}-$(node -p process.arch).json"
+    export PRUMO_CLAUDE_ATTESTATION="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-evidence-${alvo}-$(node -p process.arch).json"
+    export PRUMO_JOB_ID="${GITHUB_RUN_ID:-local}-${alvo}"
+  fi
   executar "Lab $tipo ($alvo $(node -p process.arch))" "lab-$tipo" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo")"
+  if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_CLAUDE_ATTESTATION PRUMO_JOB_ID; fi
 done
 executar "Instaladores ($alvo)" dist "npm run dist:$alvo"
 
