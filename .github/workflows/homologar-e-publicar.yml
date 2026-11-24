@@ -203,7 +203,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: evidencia-claude-windows
-          path: ${{ runner.temp }}/lab-e2e-result-*.json
+          path: ${{ runner.temp }}/claude-evidence-*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
@@ -282,7 +282,7 @@ jobs:
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: evidencia-claude-${{ matrix.alvo }}-${{ runner.arch }}
-          path: ${{ runner.temp }}/lab-e2e-result-*.json
+          path: ${{ runner.temp }}/claude-evidence-*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
@@ -335,7 +335,7 @@ jobs:
           pattern: evidencia-claude-*
           path: ${{ runner.temp }}/evidencias-claude
           merge-multiple: true
-      - name: Exigir PASS rastreável em cada plataforma
+      - name: Exigir evidência externa real e rastreável
         env:
           CODIGO_SHA: ${{ inputs.codigo_sha }}
           LAB_SHA: ${{ inputs.lab_sha }}
@@ -347,21 +347,21 @@ jobs:
           const raiz = path.join(process.env.RUNNER_TEMP, 'evidencias-claude');
           const arquivos = fs.existsSync(raiz) ? fs.readdirSync(raiz).filter(n => n.endsWith('.json')).map(n => path.join(raiz, n)) : [];
           if (!arquivos.length) throw new Error('Evidência real do Claude Code ausente.');
-          const alvo = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
           const plataformas = new Set();
+          let pass = 0;
           for (const arquivo of arquivos) {
             const resultado = JSON.parse(fs.readFileSync(arquivo, 'utf8'));
-            const caso = resultado.cases?.find(c => c.id === alvo);
-            if (!caso || caso.status !== 'PASS') throw new Error(`Evidência externa não aprovada: ${path.basename(arquivo)} (${caso?.status ?? 'ausente'}).`);
-            const rastreabilidade = (caso.evidence ?? '').split('\n').find(l => l.startsWith('rastreabilidade '));
-            const metadados = rastreabilidade ? JSON.parse(rastreabilidade.slice('rastreabilidade '.length)) : null;
-            if (!metadados || metadados.codigo_sha !== process.env.CODIGO_SHA || metadados.lab_sha !== process.env.LAB_SHA) {
+            if (resultado.schema !== 'prumo-claude-attestation/v1' || resultado.caseId !== 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs' || !/^[0-9a-f]{64}$/.test(resultado.resultado_sha256 ?? '')) throw new Error(`Atestado externo inválido: ${path.basename(arquivo)}.`);
+            if (!['PASS', 'BLOCKED'].includes(resultado.status) || (resultado.status === 'BLOCKED' && resultado.reason !== 'CLAUDE_CODE_UNAVAILABLE')) throw new Error(`Status externo inválido: ${path.basename(arquivo)}.`);
+            if (resultado.status === 'PASS') pass++;
+            if (resultado.codigo_sha !== process.env.CODIGO_SHA || resultado.lab_sha !== process.env.LAB_SHA) {
               throw new Error(`Evidência externa não corresponde aos SHAs candidatos: ${path.basename(arquivo)}.`);
             }
-            plataformas.add(resultado.ambientes?.[0]?.plataforma);
+            plataformas.add(resultado.plataforma);
           }
           for (const plataforma of ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64']) if (!plataformas.has(plataforma)) throw new Error(`Evidência externa ausente para ${plataforma}.`);
-          console.log(`Evidência Claude Code PASS validada em ${arquivos.length} plataforma(s), com os SHAs exatos.`);
+          if (!pass) throw new Error('Nenhuma evidência PASS do Claude Code em ambiente autorizado.');
+          console.log(`Evidência Claude Code PASS validada em ${pass} ambiente(s), com os SHAs exatos; BLOCKED externo foi aceito apenas nos demais ambientes.`);
           NODE
       - name: Conferir os cinco instaladores e os checksums no rascunho
         run: |

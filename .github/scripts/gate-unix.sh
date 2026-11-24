@@ -3,18 +3,24 @@
 # instaladores, executável empacotado e
 # validação dos pacotes finais), cada um com a saída fora do log público (executar-silencioso.mjs).
 # Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux
-set -uo pipefail
+set -euo pipefail
 alvo="${1:?Uso: gate-unix.sh mac|linux}"
 silencioso="$GITHUB_WORKSPACE/publico/.github/scripts/executar-silencioso.mjs"
+resumo="$GITHUB_WORKSPACE/publico/.github/scripts/resumo-seguro.mjs"
 arquivo_bloqueio_claude="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-e2e-blocked"
 executar() {
-  local rotulo="$1" log="$2" comando="$3" codigo=0 log_privado="${PRUMO_LOGS_PRIVADOS:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/logs-privados}/$2.log"
+  local rotulo="$1" log="$2" comando="$3" codigo=0
   node "$silencioso" "$rotulo" "$log" "$comando" || codigo=$?
-  if [ "$codigo" -eq 0 ]; then return 0; fi
-  if [ "$codigo" -eq 3 ] && [[ "$rotulo" == Lab\ e2e\ \(* ]] && grep -Eq '^[[:space:]]*#[[:space:]]*LAB_BLOCKED:[[:space:]]*CLAUDE_CODE_UNAVAILABLE[[:space:]]*$' "$log_privado" 2>/dev/null; then
-    printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"
-    echo "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
-    return 0
+  if [[ "$rotulo" == Lab\ e2e\ \(* ]] && [ -n "${PRUMO_RESULT_FILE:-}" ]; then
+    local validacao=1
+    node "$resumo" --validar-resultado "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION" "$CODIGO_SHA" "$LAB_SHA" "$(node -p 'process.platform + "-" + process.arch')" "$PRUMO_JOB_ID" || validacao=$?
+    if [ "$codigo" -eq 0 ] && [ "$validacao" -eq 0 ]; then return 0; fi
+    if [ "$codigo" -eq 3 ] && [ "$validacao" -eq 3 ]; then
+      printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"
+      echo "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+      return 0
+    fi
+    if [ "$codigo" -eq 0 ]; then return 1; fi
   fi
   return "$codigo"
 }
@@ -48,10 +54,11 @@ executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --t
 for tipo in smoke integracao e2e regressao; do
   if [ "$tipo" = e2e ]; then
     export PRUMO_RESULT_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lab-e2e-result-${alvo}-$(node -p process.arch).json"
+    export PRUMO_CLAUDE_ATTESTATION="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-evidence-${alvo}-$(node -p process.arch).json"
     export PRUMO_JOB_ID="${GITHUB_RUN_ID:-local}-${alvo}"
   fi
   executar "Lab $tipo ($alvo $(node -p process.arch))" "lab-$tipo" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo")"
-  if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_JOB_ID; fi
+  if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_CLAUDE_ATTESTATION PRUMO_JOB_ID; fi
 done
 executar "Instaladores ($alvo)" dist "npm run dist:$alvo"
 

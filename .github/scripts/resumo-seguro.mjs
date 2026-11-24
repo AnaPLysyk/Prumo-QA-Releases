@@ -8,8 +8,43 @@
  * Uso: node resumo-seguro.mjs <saida.log> <rótulo> <código-de-saída>
  */
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 
-const [arquivo, rotulo = 'Etapa', codigoTexto = '1'] = process.argv.slice(2);
+const argumentos = process.argv.slice(2);
+if (argumentos[0] === '--validar-resultado') {
+  const [, resultadoArquivo, atestadoArquivo, codigoSha, labSha, plataforma, jobId = ''] = argumentos;
+  const casoClaude = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
+  const falhar = (mensagem) => { console.error(`Evidência externa inválida: ${mensagem}`); process.exit(1); };
+  if (!resultadoArquivo || !atestadoArquivo || !/^[0-9a-f]{40}$/.test(codigoSha) || !/^[0-9a-f]{40}$/.test(labSha)) falhar('parâmetros');
+  let resultado;
+  try { resultado = JSON.parse(fs.readFileSync(resultadoArquivo, 'utf8')); } catch { falhar('resultado ausente ou ilegível'); }
+  const casos = Array.isArray(resultado?.cases) ? resultado.cases : [];
+  const caso = casos.find((item) => item?.id === casoClaude);
+  if (!caso) falhar('caso Claude Code ausente');
+  if (casos.some((item) => item?.status === 'FAIL')) falhar('falha genuína presente');
+  const bloqueados = casos.filter((item) => item?.status === 'BLOCKED');
+  if (bloqueados.some((item) => item.id !== casoClaude || !String(item.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE'))) falhar('BLOCKED não autorizado');
+  if (!['PASS', 'BLOCKED'].includes(caso.status)) falhar('status não aprovado');
+  if (caso.status === 'BLOCKED' && !String(caso.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE')) falhar('motivo BLOCKED ausente');
+  if (caso.status === 'PASS' && bloqueados.length) falhar('há BLOCKED junto com PASS do Claude');
+  const conteudo = fs.readFileSync(resultadoArquivo);
+  const atestado = {
+    schema: 'prumo-claude-attestation/v1',
+    status: caso.status,
+    reason: caso.status === 'BLOCKED' ? 'CLAUDE_CODE_UNAVAILABLE' : null,
+    caseId: casoClaude,
+    codigo_sha: codigoSha,
+    lab_sha: labSha,
+    plataforma,
+    jobId,
+    resultado_sha256: crypto.createHash('sha256').update(conteudo).digest('hex')
+  };
+  fs.writeFileSync(atestadoArquivo, JSON.stringify(atestado));
+  console.log(`Evidência externa ${caso.status}: ${plataforma}`);
+  process.exit(caso.status === 'BLOCKED' ? 3 : 0);
+}
+
+const [arquivo, rotulo = 'Etapa', codigoTexto = '1'] = argumentos;
 const codigo = Number(codigoTexto);
 const linhas = fs.existsSync(arquivo) ? fs.readFileSync(arquivo, 'utf8').split(/\r?\n/) : [];
 const contarReporter = (nome) => {
@@ -45,10 +80,10 @@ const estado = codigo === 0 && !marcadorClaude ? 'PASS' : bloqueado ? 'BLOCKED' 
 const partes = [`${rotulo}: ${estado} (código ${codigo})`];
 for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo']) {
   const valorBruto = contar(nome) ?? contarReporter(nome);
-  const valor = nome === 'pass' && estado !== 'PASS' ? 0 : valorBruto;
+  const valor = valorBruto;
   if (valor !== null) partes.push(`${nome}=${valor}`);
 }
-if (bloqueado) partes.push('blocked=1');
+if (bloqueado) partes.push('blocked=1 · approved_pass=0');
 console.log(partes.join(' · '));
 for (const nome of falhas) console.log(`  não passou: ${nome}`);
 if (estado !== 'PASS') console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se a chave autorizada existir.');
