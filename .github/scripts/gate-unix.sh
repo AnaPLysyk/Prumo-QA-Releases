@@ -13,7 +13,7 @@ executar() {
   node "$silencioso" "$rotulo" "$log" "$comando" || codigo=$?
   if [[ "$rotulo" == Lab\ e2e\ \(* ]] && [ -n "${PRUMO_RESULT_FILE:-}" ]; then
     local validacao=1
-    node "$resumo" --validar-resultado "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION" "$CODIGO_SHA" "$LAB_SHA" "$(node -p 'process.platform + "-" + process.arch')" "$PRUMO_JOB_ID" || validacao=$?
+    node "$resumo" --validar-resultado "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION" "$VERSAO" "$CODIGO_SHA" "$LAB_SHA" "$(node -p 'process.platform + "-" + process.arch')" "$PRUMO_JOB_ID" || validacao=$?
     if [ "$codigo" -eq 0 ] && [ "$validacao" -eq 0 ]; then return 0; fi
     if [ "$codigo" -eq 3 ] && [ "$validacao" -eq 3 ]; then
       printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"

@@ -12,24 +12,32 @@ import crypto from 'node:crypto';
 
 const argumentos = process.argv.slice(2);
 if (argumentos[0] === '--validar-resultado') {
-  const [, resultadoArquivo, atestadoArquivo, codigoSha, labSha, plataforma, jobId = ''] = argumentos;
+  const [, resultadoArquivo, atestadoArquivo, versao, codigoSha, labSha, plataforma, jobId = ''] = argumentos;
   const casoClaude = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
   const falhar = (mensagem) => { console.error(`Evidência externa inválida: ${mensagem}`); process.exit(1); };
-  if (!resultadoArquivo || !atestadoArquivo || !/^[0-9a-f]{40}$/.test(codigoSha) || !/^[0-9a-f]{40}$/.test(labSha)) falhar('parâmetros');
+  if (!resultadoArquivo || !atestadoArquivo || !/^\d+\.\d+\.\d+$/.test(versao) || !/^[0-9a-f]{40}$/.test(codigoSha) || !/^[0-9a-f]{40}$/.test(labSha)) falhar('parâmetros');
   let resultado;
   try { resultado = JSON.parse(fs.readFileSync(resultadoArquivo, 'utf8')); } catch { falhar('resultado ausente ou ilegível'); }
   const casos = Array.isArray(resultado?.cases) ? resultado.cases : [];
   const caso = casos.find((item) => item?.id === casoClaude);
   if (!caso) falhar('caso Claude Code ausente');
   if (casos.some((item) => item?.status === 'FAIL')) falhar('falha genuína presente');
+  if (casos.some((item) => !['PASS', 'BLOCKED'].includes(item?.status))) falhar('resultado incompleto ou estado obrigatório não aprovado');
   const bloqueados = casos.filter((item) => item?.status === 'BLOCKED');
   if (bloqueados.some((item) => item.id !== casoClaude || !String(item.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE'))) falhar('BLOCKED não autorizado');
+  if (new Set(casos.map((item) => item?.id)).size !== casos.length) falhar('casos duplicados');
   if (!['PASS', 'BLOCKED'].includes(caso.status)) falhar('status não aprovado');
   if (caso.status === 'BLOCKED' && !String(caso.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE')) falhar('motivo BLOCKED ausente');
   if (caso.status === 'PASS' && bloqueados.length) falhar('há BLOCKED junto com PASS do Claude');
+  const rastreabilidade = String(caso.evidence ?? '').split('\n').find((linha) => linha.startsWith('rastreabilidade '));
+  let metadados;
+  try { metadados = rastreabilidade ? JSON.parse(rastreabilidade.slice('rastreabilidade '.length)) : null; } catch { metadados = null; }
+  if (!metadados || metadados.versao !== versao || metadados.codigo_sha !== codigoSha || metadados.lab_sha !== labSha || metadados.plataforma !== plataforma) falhar('rastreabilidade divergente ou incompleta');
   const conteudo = fs.readFileSync(resultadoArquivo);
   const atestado = {
     schema: 'prumo-claude-attestation/v1',
+    source: 'runner',
+    versao,
     status: caso.status,
     reason: caso.status === 'BLOCKED' ? 'CLAUDE_CODE_UNAVAILABLE' : null,
     caseId: casoClaude,
@@ -47,6 +55,13 @@ if (argumentos[0] === '--validar-resultado') {
 const [arquivo, rotulo = 'Etapa', codigoTexto = '1'] = argumentos;
 const codigo = Number(codigoTexto);
 const linhas = fs.existsSync(arquivo) ? fs.readFileSync(arquivo, 'utf8').split(/\r?\n/) : [];
+let resultadoEstruturado = null;
+if (process.env.PRUMO_RESULT_FILE && fs.existsSync(process.env.PRUMO_RESULT_FILE)) {
+  try { resultadoEstruturado = JSON.parse(fs.readFileSync(process.env.PRUMO_RESULT_FILE, 'utf8')); } catch { resultadoEstruturado = null; }
+}
+const estadosEstruturados = Array.isArray(resultadoEstruturado?.cases) ? resultadoEstruturado.cases.map((item) => item?.status) : [];
+const falhaEstruturadaDoResultado = estadosEstruturados.includes('FAIL');
+const bloqueioEstruturadoDoResultado = estadosEstruturados.includes('BLOCKED');
 const contarReporter = (nome) => {
   const valores = linhas.filter((linha) => {
     const texto = linha.trim();
@@ -74,9 +89,9 @@ const falhasSpec = linhas
   .map((m) => m[1]);
 const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 15);
 const marcadorClaude = linhas.some((linha) => /^\s*#\s*LAB_BLOCKED:\s*CLAUDE_CODE_UNAVAILABLE\s*$/.test(linha));
-const falhaEstruturada = falhas.length > 0 || linhas.some((linha) => /^(?:#|ℹ) fail [1-9]\d*\s*$/.test(linha.trim()));
-const bloqueado = codigo === 3 && marcadorClaude && !falhaEstruturada;
-const estado = codigo === 0 && !marcadorClaude ? 'PASS' : bloqueado ? 'BLOCKED' : 'FAIL';
+const falhaEstruturada = falhas.length > 0 || linhas.some((linha) => /^(?:#|ℹ) fail [1-9]\d*\s*$/.test(linha.trim())) || falhaEstruturadaDoResultado;
+const bloqueado = codigo === 3 && (marcadorClaude || bloqueioEstruturadoDoResultado) && !falhaEstruturada;
+const estado = codigo === 0 && !marcadorClaude && !bloqueioEstruturadoDoResultado && !falhaEstruturada ? 'PASS' : bloqueado ? 'BLOCKED' : 'FAIL';
 const partes = [`${rotulo}: ${estado} (código ${codigo})`];
 for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo']) {
   const valorBruto = contar(nome) ?? contarReporter(nome);

@@ -10,7 +10,7 @@ function Executar([string]$rotulo, [string]$log, [string]$comando) {
   $codigo = $LASTEXITCODE
   if ($rotulo -like 'Lab e2e (*)' -and $env:PRUMO_RESULT_FILE) {
     $plataforma = node -p 'process.platform + "-" + process.arch'
-    node $resumo --validar-resultado $env:PRUMO_RESULT_FILE $env:PRUMO_CLAUDE_ATTESTATION $env:CODIGO_SHA $env:LAB_SHA $plataforma $env:PRUMO_JOB_ID
+    node $resumo --validar-resultado $env:PRUMO_RESULT_FILE $env:PRUMO_CLAUDE_ATTESTATION $env:VERSAO $env:CODIGO_SHA $env:LAB_SHA $plataforma $env:PRUMO_JOB_ID
     $validacao = $LASTEXITCODE
     if ($codigo -eq 0 -and $validacao -eq 0) { return }
     if ($codigo -eq 3 -and $validacao -eq 3) {

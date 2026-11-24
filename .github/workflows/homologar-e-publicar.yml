@@ -339,6 +339,8 @@ jobs:
         env:
           CODIGO_SHA: ${{ inputs.codigo_sha }}
           LAB_SHA: ${{ inputs.lab_sha }}
+          VERSAO: ${{ inputs.versao }}
+          PRUMO_CLAUDE_LOCAL_ATTESTATION: ${{ secrets.PRUMO_CLAUDE_LOCAL_ATTESTATION }}
         run: |
           set -euo pipefail
           node - <<'NODE'
@@ -346,21 +348,31 @@ jobs:
           const path = require('node:path');
           const raiz = path.join(process.env.RUNNER_TEMP, 'evidencias-claude');
           const arquivos = fs.existsSync(raiz) ? fs.readdirSync(raiz).filter(n => n.endsWith('.json')).map(n => path.join(raiz, n)) : [];
-          if (!arquivos.length) throw new Error('Evidência real do Claude Code ausente.');
+          const atestados = arquivos.map(arquivo => JSON.parse(fs.readFileSync(arquivo, 'utf8')));
+          if (process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION) {
+            try { atestados.push({ ...JSON.parse(process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION), source: 'local-authorized' }); }
+            catch { throw new Error('Atestado local autorizado ilegível.'); }
+          }
+          if (!atestados.length) throw new Error('Evidência real do Claude Code ausente.');
           const plataformas = new Set();
+          const identidades = new Set();
           let pass = 0;
-          for (const arquivo of arquivos) {
-            const resultado = JSON.parse(fs.readFileSync(arquivo, 'utf8'));
-            if (resultado.schema !== 'prumo-claude-attestation/v1' || resultado.caseId !== 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs' || !/^[0-9a-f]{64}$/.test(resultado.resultado_sha256 ?? '')) throw new Error(`Atestado externo inválido: ${path.basename(arquivo)}.`);
-            if (!['PASS', 'BLOCKED'].includes(resultado.status) || (resultado.status === 'BLOCKED' && resultado.reason !== 'CLAUDE_CODE_UNAVAILABLE')) throw new Error(`Status externo inválido: ${path.basename(arquivo)}.`);
+          let localPass = 0;
+          for (const resultado of atestados) {
+            if (resultado.schema !== 'prumo-claude-attestation/v1' || resultado.caseId !== 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs' || !/^\d+\.\d+\.\d+$/.test(resultado.versao ?? '') || !/^[0-9a-f]{64}$/.test(resultado.resultado_sha256 ?? '')) throw new Error('Atestado externo inválido.');
+            if (!['PASS', 'BLOCKED'].includes(resultado.status) || (resultado.status === 'BLOCKED' && resultado.reason !== 'CLAUDE_CODE_UNAVAILABLE')) throw new Error('Status externo inválido.');
+            if (resultado.versao !== process.env.VERSAO || resultado.codigo_sha !== process.env.CODIGO_SHA || resultado.lab_sha !== process.env.LAB_SHA) throw new Error('Atestado externo não corresponde à versão ou aos SHAs candidatos.');
+            if (resultado.source === 'local-authorized' && resultado.status !== 'PASS') throw new Error('A evidência local autorizada precisa estar em PASS.');
+            const identidade = `${resultado.source ?? 'runner'}:${resultado.plataforma}`;
+            if (identidades.has(identidade)) throw new Error('Atestados externos duplicados.');
+            identidades.add(identidade);
             if (resultado.status === 'PASS') pass++;
-            if (resultado.codigo_sha !== process.env.CODIGO_SHA || resultado.lab_sha !== process.env.LAB_SHA) {
-              throw new Error(`Evidência externa não corresponde aos SHAs candidatos: ${path.basename(arquivo)}.`);
-            }
+            if (resultado.source === 'local-authorized' && resultado.status === 'PASS') localPass++;
             plataformas.add(resultado.plataforma);
           }
-          for (const plataforma of ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64']) if (!plataformas.has(plataforma)) throw new Error(`Evidência externa ausente para ${plataforma}.`);
+          for (const plataforma of ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64']) if (![...atestados].some(a => a.source !== 'local-authorized' && a.plataforma === plataforma)) throw new Error(`Evidência externa ausente para ${plataforma}.`);
           if (!pass) throw new Error('Nenhuma evidência PASS do Claude Code em ambiente autorizado.');
+          if (!localPass && !atestados.some(a => a.source !== 'local-authorized' && a.status === 'PASS')) throw new Error('Sem PASS real do Claude Code: runners públicos só produziram BLOCKED.');
           console.log(`Evidência Claude Code PASS validada em ${pass} ambiente(s), com os SHAs exatos; BLOCKED externo foi aceito apenas nos demais ambientes.`);
           NODE
       - name: Conferir os cinco instaladores e os checksums no rascunho
