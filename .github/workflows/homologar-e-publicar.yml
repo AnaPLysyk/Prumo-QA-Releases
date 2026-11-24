@@ -212,7 +212,7 @@ jobs:
           name: logs-cifrados-windows
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
-          retention-days: 1
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
       - name: Anexar o instalador ao rascunho (só ao publicar)
         if: inputs.publicar
         shell: bash
@@ -280,7 +280,7 @@ jobs:
           name: logs-cifrados-${{ matrix.alvo }}-${{ runner.arch }}
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
-          retention-days: 1
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
       # Cada arquivo publicado é o mesmo que um runner da própria arquitetura instalou, abriu e testou: o .dmg arm64 vem do Apple
       # Silicon, o .dmg x64 do Intel, e os dois de Linux do Ubuntu.
       - name: Anexar os instaladores ao rascunho (só ao publicar)
