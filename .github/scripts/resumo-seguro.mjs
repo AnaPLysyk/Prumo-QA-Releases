@@ -38,11 +38,17 @@ const falhasSpec = linhas
   .filter(Boolean)
   .map((m) => m[1]);
 const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 15);
-const partes = [`${rotulo}: ${codigo === 0 ? 'PASS' : 'FAIL'} (código ${codigo})`];
+const marcadorClaude = linhas.some((linha) => /^\s*#\s*LAB_BLOCKED:\s*CLAUDE_CODE_UNAVAILABLE\s*$/.test(linha));
+const falhaEstruturada = falhas.length > 0 || linhas.some((linha) => /^(?:#|ℹ) fail [1-9]\d*\s*$/.test(linha.trim()));
+const bloqueado = codigo === 3 && marcadorClaude && !falhaEstruturada;
+const estado = codigo === 0 && !marcadorClaude ? 'PASS' : bloqueado ? 'BLOCKED' : 'FAIL';
+const partes = [`${rotulo}: ${estado} (código ${codigo})`];
 for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo']) {
-  const valor = contar(nome) ?? contarReporter(nome);
+  const valorBruto = contar(nome) ?? contarReporter(nome);
+  const valor = nome === 'pass' && estado !== 'PASS' ? 0 : valorBruto;
   if (valor !== null) partes.push(`${nome}=${valor}`);
 }
+if (bloqueado) partes.push('blocked=1');
 console.log(partes.join(' · '));
 for (const nome of falhas) console.log(`  não passou: ${nome}`);
-if (codigo !== 0) console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se PRUMO_LOG_SENHA existir.');
+if (estado !== 'PASS') console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se a chave autorizada existir.');

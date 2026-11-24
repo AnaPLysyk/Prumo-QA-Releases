@@ -6,7 +6,18 @@
 set -uo pipefail
 alvo="${1:?Uso: gate-unix.sh mac|linux}"
 silencioso="$GITHUB_WORKSPACE/publico/.github/scripts/executar-silencioso.mjs"
-executar() { node "$silencioso" "$1" "$2" "$3" || exit $?; }
+arquivo_bloqueio_claude="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-e2e-blocked"
+executar() {
+  local rotulo="$1" log="$2" comando="$3" codigo=0 log_privado="${PRUMO_LOGS_PRIVADOS:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/logs-privados}/$2.log"
+  node "$silencioso" "$rotulo" "$log" "$comando" || codigo=$?
+  if [ "$codigo" -eq 0 ]; then return 0; fi
+  if [ "$codigo" -eq 3 ] && [[ "$rotulo" == Lab\ e2e\ \(* ]] && grep -Eq '^[[:space:]]*#[[:space:]]*LAB_BLOCKED:[[:space:]]*CLAUDE_CODE_UNAVAILABLE[[:space:]]*$' "$log_privado" 2>/dev/null; then
+    printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"
+    echo "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+    return 0
+  fi
+  return "$codigo"
+}
 # Linux: janela no Xvfb e cofre do GNOME destravado numa sessão D-Bus própria, como numa área de trabalho real.
 sessao() {
   if [ "$alvo" = "linux" ]; then
@@ -34,8 +45,13 @@ executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci '
 executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
 executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
 executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
-for tipo in smoke integracao e2e; do
+for tipo in smoke integracao e2e regressao; do
+  if [ "$tipo" = e2e ]; then
+    export PRUMO_RESULT_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lab-e2e-result-${alvo}-$(node -p process.arch).json"
+    export PRUMO_JOB_ID="${GITHUB_RUN_ID:-local}-${alvo}"
+  fi
   executar "Lab $tipo ($alvo $(node -p process.arch))" "lab-$tipo" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo")"
+  if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_JOB_ID; fi
 done
 executar "Instaladores ($alvo)" dist "npm run dist:$alvo"
 

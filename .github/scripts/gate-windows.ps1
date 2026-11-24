@@ -3,9 +3,20 @@
 # com a saída fora do log público (executar-silencioso.mjs). Roda dentro da pasta "codigo" (checkout do commit privado imutável).
 $ErrorActionPreference = 'Stop'
 $silencioso = Join-Path $env:GITHUB_WORKSPACE 'publico/.github/scripts/executar-silencioso.mjs'
+$arquivoBloqueioClaude = Join-Path $env:RUNNER_TEMP 'claude-e2e-blocked'
 function Executar([string]$rotulo, [string]$log, [string]$comando) {
   node $silencioso $rotulo $log $comando
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  $codigo = $LASTEXITCODE
+  if ($codigo -eq 0) { return }
+  $pastaLogs = $env:PRUMO_LOGS_PRIVADOS
+  if (-not $pastaLogs) { $pastaLogs = Join-Path $env:RUNNER_TEMP 'logs-privados' }
+  $logPrivado = Join-Path $pastaLogs "$log.log"
+  if ($codigo -eq 3 -and $rotulo -like 'Lab e2e (*)' -and (Test-Path $logPrivado) -and (Select-String -Path $logPrivado -Pattern '^\s*#\s*LAB_BLOCKED:\s*CLAUDE_CODE_UNAVAILABLE\s*$' -Quiet)) {
+    Set-Content -Path $arquivoBloqueioClaude -Value 'CLAUDE_CODE_UNAVAILABLE' -NoNewline
+    Write-Host "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+    return
+  }
+  exit $codigo
 }
 
 Executar 'npm ci' npm-ci 'npm ci'
@@ -19,7 +30,12 @@ Executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototi
 # O Windows do Actions não tem GPU: os testes de janela rodam com "reduzir movimento" (docs/RELEASE.md); os demais, em modo normal.
 foreach ($tipo in 'smoke', 'integracao', 'e2e', 'regressao') {
   $env:LAB_MOVIMENTO_REDUZIDO = if ($tipo -in 'e2e', 'regressao') { '1' } else { '' }
+  if ($tipo -eq 'e2e') {
+    $env:PRUMO_RESULT_FILE = Join-Path $env:RUNNER_TEMP 'lab-e2e-result-windows.json'
+    $env:PRUMO_JOB_ID = "${env:GITHUB_RUN_ID}-windows"
+  }
   Executar "Lab $tipo (Windows)" "lab-$tipo" "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo"
+  if ($tipo -eq 'e2e') { Remove-Item Env:PRUMO_RESULT_FILE; Remove-Item Env:PRUMO_JOB_ID }
 }
 
 $env:LAB_MOVIMENTO_REDUZIDO = '1'

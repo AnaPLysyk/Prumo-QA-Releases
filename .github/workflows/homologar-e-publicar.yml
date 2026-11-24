@@ -167,6 +167,8 @@ jobs:
       contents: write
     env:
       VERSAO: ${{ inputs.versao }}
+      CODIGO_SHA: ${{ inputs.codigo_sha }}
+      LAB_SHA: ${{ inputs.lab_sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -196,6 +198,14 @@ jobs:
         shell: pwsh
         working-directory: codigo
         run: ../publico/.github/scripts/gate-windows.ps1
+      - name: Preservar evidência estruturada do E2E externo
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: evidencia-claude-windows
+          path: ${{ runner.temp }}/lab-e2e-result-*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
         if: failure()
         shell: bash
@@ -238,6 +248,8 @@ jobs:
           - { nome: 'Linux', os: ubuntu-latest, alvo: linux }
     env:
       VERSAO: ${{ inputs.versao }}
+      CODIGO_SHA: ${{ inputs.codigo_sha }}
+      LAB_SHA: ${{ inputs.lab_sha }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -265,6 +277,14 @@ jobs:
       - name: Gate (testes, instaladores e pacotes finais)
         working-directory: codigo
         run: bash ../publico/.github/scripts/gate-unix.sh ${{ matrix.alvo }}
+      - name: Preservar evidência estruturada do E2E externo
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: evidencia-claude-${{ matrix.alvo }}-${{ runner.arch }}
+          path: ${{ runner.temp }}/lab-e2e-result-*.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
         if: failure()
         env:
@@ -309,6 +329,40 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VERSAO: ${{ inputs.versao }}
     steps:
+      - name: Baixar e validar evidência real do Claude Code
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v5
+        with:
+          pattern: evidencia-claude-*
+          path: ${{ runner.temp }}/evidencias-claude
+          merge-multiple: true
+      - name: Exigir PASS rastreável em cada plataforma
+        env:
+          CODIGO_SHA: ${{ inputs.codigo_sha }}
+          LAB_SHA: ${{ inputs.lab_sha }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const raiz = path.join(process.env.RUNNER_TEMP, 'evidencias-claude');
+          const arquivos = fs.existsSync(raiz) ? fs.readdirSync(raiz).filter(n => n.endsWith('.json')).map(n => path.join(raiz, n)) : [];
+          if (!arquivos.length) throw new Error('Evidência real do Claude Code ausente.');
+          const alvo = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
+          const plataformas = new Set();
+          for (const arquivo of arquivos) {
+            const resultado = JSON.parse(fs.readFileSync(arquivo, 'utf8'));
+            const caso = resultado.cases?.find(c => c.id === alvo);
+            if (!caso || caso.status !== 'PASS') throw new Error(`Evidência externa não aprovada: ${path.basename(arquivo)} (${caso?.status ?? 'ausente'}).`);
+            const rastreabilidade = (caso.evidence ?? '').split('\n').find(l => l.startsWith('rastreabilidade '));
+            const metadados = rastreabilidade ? JSON.parse(rastreabilidade.slice('rastreabilidade '.length)) : null;
+            if (!metadados || metadados.codigo_sha !== process.env.CODIGO_SHA || metadados.lab_sha !== process.env.LAB_SHA) {
+              throw new Error(`Evidência externa não corresponde aos SHAs candidatos: ${path.basename(arquivo)}.`);
+            }
+            plataformas.add(resultado.ambientes?.[0]?.plataforma);
+          }
+          for (const plataforma of ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64']) if (!plataformas.has(plataforma)) throw new Error(`Evidência externa ausente para ${plataforma}.`);
+          console.log(`Evidência Claude Code PASS validada em ${arquivos.length} plataforma(s), com os SHAs exatos.`);
+          NODE
       - name: Conferir os cinco instaladores e os checksums no rascunho
         run: |
           set -euo pipefail
