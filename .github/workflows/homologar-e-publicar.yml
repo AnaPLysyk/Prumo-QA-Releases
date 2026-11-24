@@ -6,7 +6,7 @@ name: Homologar e publicar (sem custo, só manual)
 #     um token de acesso restrito com somente "Contents: Read" nesses dois repositórios; o token não é gravado no checkout;
 #   - o log deste repositório é PÚBLICO: nenhum comando que roda código privado escreve no console. A saída completa vai para um
 #     arquivo; o console recebe só o resumo seguro (rótulo, PASS/FAIL, contagens e nome dos testes). O log completo só sai como
-#     artefato CIFRADO (AES-256-GCM, segredo PRUMO_LOG_SENHA), e só em falha;
+#     artefato cifrado (AES-256-GCM com chave AES protegida por RSA-OAEP-SHA256), e só em falha; a chave privada não entra no CI;
 #   - só dispara à mão (workflow_dispatch), só pelo dono do repositório, nunca por PR, push ou fork (forks não recebem segredos).
 # gate-windows.ps1 e gate-unix.sh são a fonte canônica da homologação multiplataforma; o CI privado faz só o retorno rápido de desenvolvimento.
 # A publicação é uma segunda execução (publicar=true): exige a tag vX.Y.Z já criada no repositório privado, no commit validado da
@@ -141,7 +141,7 @@ jobs:
       - name: Guardar os logs privados cifrados (só em falha)
         if: failure()
         env:
-          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+          PRUMO_LOG_PUBLIC_KEY: ${{ vars.PRUMO_LOG_PUBLIC_KEY }}
         run: |
           set -euo pipefail
           if [ -d "$RUNNER_TEMP/logs-privados" ]; then
@@ -155,7 +155,7 @@ jobs:
           name: logs-cifrados-rascunho
           path: ${{ runner.temp }}/rascunho-privado.enc
           if-no-files-found: ignore
-          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado
 
   gate-windows:
     name: Windows
@@ -200,7 +200,7 @@ jobs:
         if: failure()
         shell: bash
         env:
-          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+          PRUMO_LOG_PUBLIC_KEY: ${{ vars.PRUMO_LOG_PUBLIC_KEY }}
         run: |
           cp -r codigo/tmp/diagnostico-e2e "$RUNNER_TEMP/logs-privados/" 2>/dev/null || true
           (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
@@ -212,7 +212,7 @@ jobs:
           name: logs-cifrados-windows
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
-          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado
       - name: Anexar o instalador ao rascunho (só ao publicar)
         if: inputs.publicar
         shell: bash
@@ -268,7 +268,7 @@ jobs:
       - name: Guardar os logs privados cifrados (só em falha)
         if: failure()
         env:
-          PRUMO_LOG_SENHA: ${{ secrets.PRUMO_LOG_SENHA }}
+          PRUMO_LOG_PUBLIC_KEY: ${{ vars.PRUMO_LOG_PUBLIC_KEY }}
         run: |
           cp -r codigo/tmp/diagnostico-e2e "$RUNNER_TEMP/logs-privados/" 2>/dev/null || true
           (cd "$RUNNER_TEMP" && tar -czf privado.tgz logs-privados) || exit 0
@@ -280,7 +280,7 @@ jobs:
           name: logs-cifrados-${{ matrix.alvo }}-${{ runner.arch }}
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
-          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar com PRUMO_LOG_SENHA e diagnosticar a falha; não expõe código privado
+          retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado
       # Cada arquivo publicado é o mesmo que um runner da própria arquitetura instalou, abriu e testou: o .dmg arm64 vem do Apple
       # Silicon, o .dmg x64 do Intel, e os dois de Linux do Ubuntu.
       - name: Anexar os instaladores ao rascunho (só ao publicar)
