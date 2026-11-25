@@ -4,24 +4,30 @@
 $ErrorActionPreference = 'Stop'
 $silencioso = Join-Path $env:GITHUB_WORKSPACE 'publico/.github/scripts/executar-silencioso.mjs'
 $resumo = Join-Path $env:GITHUB_WORKSPACE 'publico/.github/scripts/resumo-seguro.mjs'
-$arquivoBloqueioClaude = Join-Path $env:RUNNER_TEMP 'claude-e2e-blocked'
+# Contrato: 0 = PASS (a função RETORNA e o gate segue para a próxima etapa; nunca "exit 0"), 3 = BLOCKED só no E2E autorizado, resto = FAIL.
+# >>> Executar
 function Executar([string]$rotulo, [string]$log, [string]$comando) {
   node $silencioso $rotulo $log $comando
   $codigo = $LASTEXITCODE
-  if ($rotulo -like 'Lab e2e (*)' -and $env:PRUMO_RESULT_FILE) {
+  if ($rotulo -like 'Lab e2e (*)') {
+    # Etapa com resultado estruturado: quem decide PASS/BLOCKED/FAIL é resumo-seguro.mjs, vinculado à versão, aos SHAs, à plataforma e ao job.
     $plataforma = node -p 'process.platform + "-" + process.arch'
     node $resumo --validar-resultado $env:PRUMO_RESULT_FILE $env:PRUMO_CLAUDE_ATTESTATION $env:VERSAO $env:CODIGO_SHA $env:LAB_SHA $plataforma $env:PRUMO_JOB_ID
-    $validacao = $LASTEXITCODE
-    if ($codigo -eq 0 -and $validacao -eq 0) { return }
-    if ($codigo -eq 3 -and $validacao -eq 3) {
-      Set-Content -Path $arquivoBloqueioClaude -Value 'CLAUDE_CODE_UNAVAILABLE' -NoNewline
-      Write-Host "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+    $decisao = $LASTEXITCODE
+    if ($codigo -eq 0 -and $decisao -eq 0) { return }
+    if ($codigo -eq 3 -and $decisao -eq 3) {
+      Write-Host "::warning::BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam, mas o teste bloqueado NÃO está aprovado)."
       return
     }
-    if ($codigo -eq 0) { exit 1 }
+    Write-Host "::error::$rotulo reprovado (código $codigo, validação $decisao)."
+    exit 1
   }
+  if ($codigo -eq 0) { return }
+  # Código 3 só significa BLOCKED no E2E autorizado acima; em qualquer outra etapa é falha.
+  if ($codigo -eq 3) { exit 1 }
   exit $codigo
 }
+# <<< Executar
 
 Executar 'npm ci' npm-ci 'npm ci'
 Executar 'Runtime Electron' electron-install 'node node_modules/electron/install.js'
@@ -37,10 +43,11 @@ foreach ($tipo in 'smoke', 'integracao', 'e2e', 'regressao') {
   if ($tipo -eq 'e2e') {
     $env:PRUMO_RESULT_FILE = Join-Path $env:RUNNER_TEMP 'lab-e2e-result-windows.json'
     $env:PRUMO_CLAUDE_ATTESTATION = Join-Path $env:RUNNER_TEMP 'claude-evidence-windows.json'
-    $env:PRUMO_JOB_ID = "${env:GITHUB_RUN_ID}-windows"
+    $env:PRUMO_JOB_ID = "$($env:GITHUB_RUN_ID)-windows-x64"
+    Remove-Item $env:PRUMO_RESULT_FILE, $env:PRUMO_CLAUDE_ATTESTATION -ErrorAction SilentlyContinue
   }
   Executar "Lab $tipo (Windows)" "lab-$tipo" "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo"
-  if ($tipo -eq 'e2e') { Remove-Item Env:PRUMO_RESULT_FILE; Remove-Item Env:PRUMO_CLAUDE_ATTESTATION; Remove-Item Env:PRUMO_JOB_ID }
+  if ($tipo -eq 'e2e') { Remove-Item Env:PRUMO_RESULT_FILE, Env:PRUMO_CLAUDE_ATTESTATION, Env:PRUMO_JOB_ID }
 }
 
 $env:LAB_MOVIMENTO_REDUZIDO = '1'

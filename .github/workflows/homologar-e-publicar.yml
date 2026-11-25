@@ -198,12 +198,12 @@ jobs:
         shell: pwsh
         working-directory: codigo
         run: ../publico/.github/scripts/gate-windows.ps1
-      - name: Preservar evidência estruturada do E2E externo
+      - name: Preservar o atestado do E2E externo (sem logs nem código privado)
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: evidencia-claude-windows
-          path: ${{ runner.temp }}/claude-evidence-*.json
+          path: ${{ runner.temp }}/claude-evidence-windows.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
@@ -277,12 +277,12 @@ jobs:
       - name: Gate (testes, instaladores e pacotes finais)
         working-directory: codigo
         run: bash ../publico/.github/scripts/gate-unix.sh ${{ matrix.alvo }}
-      - name: Preservar evidência estruturada do E2E externo
+      - name: Preservar o atestado do E2E externo (sem logs nem código privado)
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: evidencia-claude-${{ matrix.alvo }}-${{ runner.arch }}
-          path: ${{ runner.temp }}/claude-evidence-*.json
+          path: ${{ runner.temp }}/claude-evidence-${{ matrix.alvo }}-*.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Guardar os logs privados cifrados (só em falha)
@@ -329,52 +329,25 @@ jobs:
       GH_REPO: ${{ github.repository }}
       VERSAO: ${{ inputs.versao }}
     steps:
-      - name: Baixar e validar evidência real do Claude Code
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          path: publico
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+      - name: Baixar os atestados do E2E externo desta execução
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           pattern: evidencia-claude-*
           path: ${{ runner.temp }}/evidencias-claude
           merge-multiple: true
-      - name: Exigir evidência externa real e rastreável
+      - name: Exigir evidência real e rastreável do Claude Code nas quatro plataformas
         env:
           CODIGO_SHA: ${{ inputs.codigo_sha }}
           LAB_SHA: ${{ inputs.lab_sha }}
-          VERSAO: ${{ inputs.versao }}
           PRUMO_CLAUDE_LOCAL_ATTESTATION: ${{ secrets.PRUMO_CLAUDE_LOCAL_ATTESTATION }}
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const raiz = path.join(process.env.RUNNER_TEMP, 'evidencias-claude');
-          const arquivos = fs.existsSync(raiz) ? fs.readdirSync(raiz).filter(n => n.endsWith('.json')).map(n => path.join(raiz, n)) : [];
-          const atestados = arquivos.map(arquivo => JSON.parse(fs.readFileSync(arquivo, 'utf8')));
-          if (process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION) {
-            try { atestados.push({ ...JSON.parse(process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION), source: 'local-authorized' }); }
-            catch { throw new Error('Atestado local autorizado ilegível.'); }
-          }
-          if (!atestados.length) throw new Error('Evidência real do Claude Code ausente.');
-          const plataformas = new Set();
-          const identidades = new Set();
-          let pass = 0;
-          let localPass = 0;
-          for (const resultado of atestados) {
-            if (resultado.schema !== 'prumo-claude-attestation/v1' || resultado.caseId !== 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs' || !/^\d+\.\d+\.\d+$/.test(resultado.versao ?? '') || !/^[0-9a-f]{64}$/.test(resultado.resultado_sha256 ?? '')) throw new Error('Atestado externo inválido.');
-            if (!['PASS', 'BLOCKED'].includes(resultado.status) || (resultado.status === 'BLOCKED' && resultado.reason !== 'CLAUDE_CODE_UNAVAILABLE')) throw new Error('Status externo inválido.');
-            if (resultado.versao !== process.env.VERSAO || resultado.codigo_sha !== process.env.CODIGO_SHA || resultado.lab_sha !== process.env.LAB_SHA) throw new Error('Atestado externo não corresponde à versão ou aos SHAs candidatos.');
-            if (resultado.source === 'local-authorized' && resultado.status !== 'PASS') throw new Error('A evidência local autorizada precisa estar em PASS.');
-            const identidade = `${resultado.source ?? 'runner'}:${resultado.plataforma}`;
-            if (identidades.has(identidade)) throw new Error('Atestados externos duplicados.');
-            identidades.add(identidade);
-            if (resultado.status === 'PASS') pass++;
-            if (resultado.source === 'local-authorized' && resultado.status === 'PASS') localPass++;
-            plataformas.add(resultado.plataforma);
-          }
-          for (const plataforma of ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64']) if (![...atestados].some(a => a.source !== 'local-authorized' && a.plataforma === plataforma)) throw new Error(`Evidência externa ausente para ${plataforma}.`);
-          if (!pass) throw new Error('Nenhuma evidência PASS do Claude Code em ambiente autorizado.');
-          if (!localPass && !atestados.some(a => a.source !== 'local-authorized' && a.status === 'PASS')) throw new Error('Sem PASS real do Claude Code: runners públicos só produziram BLOCKED.');
-          console.log(`Evidência Claude Code PASS validada em ${pass} ambiente(s), com os SHAs exatos; BLOCKED externo foi aceito apenas nos demais ambientes.`);
-          NODE
+        run: node publico/.github/scripts/resumo-seguro.mjs --validar-atestados "$RUNNER_TEMP/evidencias-claude" "$VERSAO" "$CODIGO_SHA" "$LAB_SHA" "$GITHUB_RUN_ID"
       - name: Conferir os cinco instaladores e os checksums no rascunho
         run: |
           set -euo pipefail
