@@ -126,6 +126,23 @@ export function casosNaoAprovados(texto) {
 export function mensagensDasFalhas(linhas, limpar = (t) => t) {
   const mensagens = new Map();
   for (let i = 0; i < linhas.length; i++) {
+    // TAP (reporter do runner do Lab): "not ok N - título" seguido de um bloco YAML com "error: ..." (texto na linha ou, com "|-", na seguinte).
+    const tap = /^\s*not ok \d+ - (.+?)\s*$/.exec(linhas[i]);
+    if (tap) {
+      const titulo = limpar(tap[1]);
+      if (mensagens.has(titulo)) continue;
+      for (let j = i + 1; j < linhas.length && j < i + 60; j++) {
+        if (/^\s*(?:not ok|ok) \d+ - /.test(linhas[j])) break;
+        const erro = /^\s*error:\s*(.*)$/.exec(linhas[j]);
+        if (!erro) continue;
+        let texto = erro[1].trim();
+        if (/^[|>][-+]?$/.test(texto)) texto = (linhas.slice(j + 1, j + 6).find((l) => l.trim()) ?? '').trim();
+        texto = texto.replace(/^(['"])(.*)\1$/, '$2').replace(/^(?:\w*Error(?: \[[\w_]+\])?|Error):\s*/, '');
+        if (texto) mensagens.set(titulo, limpar(texto).slice(0, 240));
+        break;
+      }
+      continue;
+    }
     const m = /^\s*✖ (?!failing tests:)(.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(linhas[i]);
     if (!m) continue;
     const titulo = limpar(m[1]);
