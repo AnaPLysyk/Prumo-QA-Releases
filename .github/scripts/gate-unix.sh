@@ -3,27 +3,32 @@
 # instaladores, executável empacotado e
 # validação dos pacotes finais), cada um com a saída fora do log público (executar-silencioso.mjs).
 # Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux
-set -euo pipefail
+set -uo pipefail
 alvo="${1:?Uso: gate-unix.sh mac|linux}"
 silencioso="$GITHUB_WORKSPACE/publico/.github/scripts/executar-silencioso.mjs"
 resumo="$GITHUB_WORKSPACE/publico/.github/scripts/resumo-seguro.mjs"
-arquivo_bloqueio_claude="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-e2e-blocked"
+# Sem "set -e" de propósito: os códigos de saída são tratados um a um (0=PASS, 3=BLOCKED só no E2E autorizado, resto=FAIL).
+# >>> executar
 executar() {
-  local rotulo="$1" log="$2" comando="$3" codigo=0
+  local rotulo="$1" log="$2" comando="$3" codigo=0 decisao=0
   node "$silencioso" "$rotulo" "$log" "$comando" || codigo=$?
-  if [[ "$rotulo" == Lab\ e2e\ \(* ]] && [ -n "${PRUMO_RESULT_FILE:-}" ]; then
-    local validacao=1
-    node "$resumo" --validar-resultado "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION" "$VERSAO" "$CODIGO_SHA" "$LAB_SHA" "$(node -p 'process.platform + "-" + process.arch')" "$PRUMO_JOB_ID" || validacao=$?
-    if [ "$codigo" -eq 0 ] && [ "$validacao" -eq 0 ]; then return 0; fi
-    if [ "$codigo" -eq 3 ] && [ "$validacao" -eq 3 ]; then
-      printf '%s\n' 'CLAUDE_CODE_UNAVAILABLE' > "$arquivo_bloqueio_claude"
-      echo "BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam)."
+  if [[ "$rotulo" == "Lab e2e ("* ]]; then
+    # Etapa com resultado estruturado: quem decide PASS/BLOCKED/FAIL é resumo-seguro.mjs, vinculado à versão, aos SHAs, à plataforma e ao job.
+    node "$resumo" --validar-resultado "${PRUMO_RESULT_FILE:-}" "${PRUMO_CLAUDE_ATTESTATION:-}" "${VERSAO:-}" "${CODIGO_SHA:-}" "${LAB_SHA:-}" "$(node -p 'process.platform + "-" + process.arch')" "${PRUMO_JOB_ID:-}" || decisao=$?
+    if [ "$codigo" -eq 0 ] && [ "$decisao" -eq 0 ]; then return 0; fi
+    if [ "$codigo" -eq 3 ] && [ "$decisao" -eq 3 ]; then
+      echo "::warning::BLOCKED: $rotulo (Claude Code externo indisponível; os demais gates continuam, mas o teste bloqueado NÃO está aprovado)."
       return 0
     fi
-    if [ "$codigo" -eq 0 ]; then return 1; fi
+    echo "::error::$rotulo reprovado (código $codigo, validação $decisao)."
+    exit 1
   fi
-  return "$codigo"
+  [ "$codigo" -eq 0 ] && return 0
+  # Código 3 só significa BLOCKED no E2E autorizado acima; em qualquer outra etapa é falha.
+  [ "$codigo" -eq 3 ] && codigo=1
+  exit "$codigo"
 }
+# <<< executar
 # Linux: janela no Xvfb e cofre do GNOME destravado numa sessão D-Bus própria, como numa área de trabalho real.
 sessao() {
   if [ "$alvo" = "linux" ]; then
@@ -55,7 +60,8 @@ for tipo in smoke integracao e2e regressao; do
   if [ "$tipo" = e2e ]; then
     export PRUMO_RESULT_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lab-e2e-result-${alvo}-$(node -p process.arch).json"
     export PRUMO_CLAUDE_ATTESTATION="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-evidence-${alvo}-$(node -p process.arch).json"
-    export PRUMO_JOB_ID="${GITHUB_RUN_ID:-local}-${alvo}"
+    export PRUMO_JOB_ID="${GITHUB_RUN_ID:-local}-${alvo}-$(node -p process.arch)"
+    rm -f "$PRUMO_RESULT_FILE" "$PRUMO_CLAUDE_ATTESTATION"
   fi
   executar "Lab $tipo ($alvo $(node -p process.arch))" "lab-$tipo" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo")"
   if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_CLAUDE_ATTESTATION PRUMO_JOB_ID; fi
