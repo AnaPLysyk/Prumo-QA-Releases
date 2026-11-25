@@ -157,8 +157,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado
 
-  # Cada plataforma roda em grupos independentes e paralelos (base, E2E, regressão em fatias, pacote): o tempo da rodada é o do
-  # grupo mais lento, não a soma. Nenhum teste saiu: a regressão é dividida por áreas calculadas a partir da lista real do Lab.
+  # Cada plataforma roda em grupos independentes e paralelos (base, E2E, regressão completa, pacote): o tempo da rodada é o do
+  # grupo mais lento, não a soma. Nenhum teste saiu; a regressão roda inteira em um único job por plataforma.
   gate-windows:
     name: Windows · ${{ matrix.nome }}
     needs: [entrada, rascunho]
@@ -173,17 +173,13 @@ jobs:
         include:
           - { nome: 'base', grupo: base }
           - { nome: 'E2E', grupo: e2e }
-          - { nome: 'regressão 1/3', grupo: regressao, fatia: 1, total: 3 }
-          - { nome: 'regressão 2/3', grupo: regressao, fatia: 2, total: 3 }
-          - { nome: 'regressão 3/3', grupo: regressao, fatia: 3, total: 3 }
+          - { nome: 'regressão', grupo: regressao }
           - { nome: 'pacote', grupo: pacote }
     env:
       VERSAO: ${{ inputs.versao }}
       CODIGO_SHA: ${{ inputs.codigo_sha }}
       LAB_SHA: ${{ inputs.lab_sha }}
       GRUPO: ${{ matrix.grupo }}
-      FATIA: ${{ matrix.fatia }}
-      TOTAL: ${{ matrix.total }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -234,7 +230,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: logs-cifrados-windows-${{ matrix.grupo }}${{ matrix.fatia }}
+          name: logs-cifrados-windows-${{ matrix.grupo }}
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
           retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado
@@ -254,27 +250,22 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: write
-    # Grupos independentes e paralelos por plataforma (base, E2E, regressão em fatias, pacote). macOS usa 2 fatias de regressão
-    # (o Actions limita os runners macOS simultâneos); Linux, 3.
+    # Grupos independentes e paralelos por plataforma (base, E2E, regressão completa, pacote).
     strategy:
       fail-fast: false
       matrix:
         include:
           - { nome: 'macOS (Apple Silicon) · base', os: macos-latest, alvo: mac, grupo: base }
           - { nome: 'macOS (Apple Silicon) · E2E', os: macos-latest, alvo: mac, grupo: e2e }
-          - { nome: 'macOS (Apple Silicon) · regressão 1/2', os: macos-latest, alvo: mac, grupo: regressao, fatia: 1, total: 2 }
-          - { nome: 'macOS (Apple Silicon) · regressão 2/2', os: macos-latest, alvo: mac, grupo: regressao, fatia: 2, total: 2 }
+          - { nome: 'macOS (Apple Silicon) · regressão', os: macos-latest, alvo: mac, grupo: regressao }
           - { nome: 'macOS (Apple Silicon) · pacote', os: macos-latest, alvo: mac, grupo: pacote }
           - { nome: 'macOS (Intel) · base', os: macos-15-intel, alvo: mac, grupo: base }
           - { nome: 'macOS (Intel) · E2E', os: macos-15-intel, alvo: mac, grupo: e2e }
-          - { nome: 'macOS (Intel) · regressão 1/2', os: macos-15-intel, alvo: mac, grupo: regressao, fatia: 1, total: 2 }
-          - { nome: 'macOS (Intel) · regressão 2/2', os: macos-15-intel, alvo: mac, grupo: regressao, fatia: 2, total: 2 }
+          - { nome: 'macOS (Intel) · regressão', os: macos-15-intel, alvo: mac, grupo: regressao }
           - { nome: 'macOS (Intel) · pacote', os: macos-15-intel, alvo: mac, grupo: pacote }
           - { nome: 'Linux · base', os: ubuntu-latest, alvo: linux, grupo: base }
           - { nome: 'Linux · E2E', os: ubuntu-latest, alvo: linux, grupo: e2e }
-          - { nome: 'Linux · regressão 1/3', os: ubuntu-latest, alvo: linux, grupo: regressao, fatia: 1, total: 3 }
-          - { nome: 'Linux · regressão 2/3', os: ubuntu-latest, alvo: linux, grupo: regressao, fatia: 2, total: 3 }
-          - { nome: 'Linux · regressão 3/3', os: ubuntu-latest, alvo: linux, grupo: regressao, fatia: 3, total: 3 }
+          - { nome: 'Linux · regressão', os: ubuntu-latest, alvo: linux, grupo: regressao }
           - { nome: 'Linux · pacote', os: ubuntu-latest, alvo: linux, grupo: pacote }
     env:
       VERSAO: ${{ inputs.versao }}
@@ -306,7 +297,7 @@ jobs:
         run: '[ "$(node -p "require(''./codigo/package.json'').version")" = "$VERSAO" ] || { echo "::error::package.json do commit não está na versão $VERSAO."; exit 1; }'
       - name: Gate (grupo ${{ matrix.nome }})
         working-directory: codigo
-        run: bash ../publico/.github/scripts/gate-unix.sh ${{ matrix.alvo }} ${{ matrix.grupo }} ${{ matrix.fatia }} ${{ matrix.total }}
+        run: bash ../publico/.github/scripts/gate-unix.sh ${{ matrix.alvo }} ${{ matrix.grupo }}
       - name: Preservar o atestado do E2E externo (sem logs nem código privado)
         if: ${{ always() && matrix.grupo == 'e2e' }}
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
@@ -327,7 +318,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
-          name: logs-cifrados-${{ matrix.alvo }}-${{ runner.arch }}-${{ matrix.grupo }}${{ matrix.fatia }}
+          name: logs-cifrados-${{ matrix.alvo }}-${{ runner.arch }}-${{ matrix.grupo }}
           path: ${{ runner.temp }}/privado.enc
           if-no-files-found: ignore
           retention-days: 7 # artefato cifrado (AES-256-GCM): 7 dias dão tempo de decifrar e diagnosticar a falha; não expõe código privado

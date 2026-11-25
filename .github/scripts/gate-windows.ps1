@@ -3,7 +3,7 @@
 # com a saída fora do log público (executar-silencioso.mjs). Roda dentro da pasta "codigo" (checkout do commit privado imutável).
 # Grupos (rodam em jobs paralelos, escolhidos por $env:GRUPO; sem GRUPO, "tudo" roda todos em sequência, como antes):
 #   base (unitários, qualidade, OAuth, smoke e integração) · e2e (com o atestado do Claude Code) ·
-#   regressao ($env:FATIA de $env:TOTAL, áreas calculadas a partir da lista real do Lab) · pacote (instalador NSIS e pacote final).
+#   regressao (suíte completa do Lab em um único job por plataforma) · pacote (instalador NSIS e pacote final).
 $ErrorActionPreference = 'Stop'
 $grupo = if ($env:GRUPO) { $env:GRUPO } else { 'tudo' }
 if ($grupo -notin 'tudo', 'base', 'e2e', 'regressao', 'pacote') { Write-Host "grupo inválido: $grupo"; exit 2 }
@@ -50,20 +50,6 @@ foreach ($tipo in 'smoke', 'integracao', 'e2e', 'regressao') {
   $pertence = if ($tipo -in 'smoke', 'integracao') { NoGrupo 'base' } else { NoGrupo $tipo }
   if (-not $pertence) { continue }
   $env:LAB_MOVIMENTO_REDUZIDO = if ($tipo -in 'e2e', 'regressao') { '1' } else { '' }
-  if ($tipo -eq 'regressao' -and $grupo -eq 'regressao') {
-    # Fatia da regressão: as áreas vêm da lista real do Lab (nenhum teste fica de fora); todas rodam mesmo se uma falhar, para a rodada trazer toda a informação.
-    $listaDaFatia = (node (Join-Path $env:GITHUB_WORKSPACE 'publico/.github/scripts/fatia-regressao.mjs') $env:FATIA $env:TOTAL)
-    if ($LASTEXITCODE -ne 0) { exit 1 }
-    $areas = @("$listaDaFatia" -split '\s+' | Where-Object { $_ })
-    Write-Host "Regressão do Lab, fatia $($env:FATIA) de $($env:TOTAL) ($($areas.Count) áreas)"
-    $falhou = $false
-    foreach ($area in $areas) {
-      node $silencioso "Lab regressao (Windows) fatia $($env:FATIA)/$($env:TOTAL)" "lab-regressao-$($area -replace '/', '-')" "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo regressao --area $area"
-      if ($LASTEXITCODE -ne 0) { $falhou = $true }
-    }
-    if ($falhou) { Write-Host "::error::Lab regressao (fatia $($env:FATIA)/$($env:TOTAL)) reprovado em uma ou mais áreas."; exit 1 }
-    continue
-  }
   if ($tipo -eq 'e2e') {
     $env:PRUMO_RESULT_FILE = Join-Path $env:RUNNER_TEMP 'lab-e2e-result-windows.json'
     $env:PRUMO_CLAUDE_ATTESTATION = Join-Path $env:RUNNER_TEMP 'claude-evidence-windows.json'
