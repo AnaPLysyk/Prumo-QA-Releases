@@ -57,20 +57,48 @@ export function avaliarResultado(texto, { versao, codigoSha, labSha, plataforma,
   return { estado: bloqueados.length ? 'BLOCKED' : 'PASS', motivo: bloqueados.length ? MOTIVO_CLAUDE : null, contagem: contarCasos(casos), digest };
 }
 
+/** Cenários E2E autorizados a aparecer pelo nome no log público (lista fechada; qualquer outro vira "<cenário fora da lista>"). */
+export const CENARIOS_PUBLICOS = Object.freeze(new Set([
+  'e2e/frontend/administracao/papel-da-conta-conforme-a-tela-que-a-criou.test.mjs',
+  'e2e/frontend/administracao/usuario-restrito-e-revogada.test.mjs',
+  'e2e/frontend/agendamentos/autorizacao-do-agendamento.test.mjs',
+  'e2e/frontend/agendamentos/editor-de-fluxos-jornadas.test.mjs',
+  'e2e/frontend/agendamentos/fluxo-agendado-executando.test.mjs',
+  'e2e/frontend/agendamentos/persistencia-do-fluxo-agendado.test.mjs',
+  'e2e/frontend/agendamentos/unica-concluida-no-dia.test.mjs',
+  'e2e/frontend/aplicativo/aprendizado-agentes.test.mjs',
+  'e2e/frontend/aplicativo/chat-agentes-mcp.test.mjs',
+  'e2e/frontend/aplicativo/chat-dispara-execucao-real.test.mjs',
+  CASO_CLAUDE,
+  'e2e/frontend/aplicativo/convite-de-canal-privado.test.mjs',
+  'e2e/frontend/aplicativo/pacote-instalado.test.mjs',
+  'e2e/frontend/aplicativo/rastreio-adaptacao.test.mjs',
+  'e2e/frontend/aplicativo/todas-as-telas.test.mjs',
+  'e2e/frontend/aplicativo/validacao-entrega.test.mjs',
+  'e2e/frontend/configuracoes/configuracoes-fechar-reabrir.test.mjs',
+  'e2e/frontend/equipe/conversas-entre-duas-contas.test.mjs',
+  'e2e/frontend/testes/executor-release-e-metricas.test.mjs'
+]));
+/** Códigos técnicos conhecidos (lista fechada). Só entram se aparecerem como palavra inteira; nada mais da evidência é copiado. */
+export const CODIGOS_PUBLICOS = Object.freeze([
+  'ERR_ASSERTION', 'ERR_TEST_FAILURE', 'ERR_MODULE_NOT_FOUND', 'ETIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'EADDRINUSE',
+  'SERVICE_TIMEOUT', 'CLAUDE_CODE_UNAVAILABLE', 'LAB_BLOCKED', 'LAB_CONFIRMACAO_SEM_RESPOSTA', 'LAB_CONFIRMACAO_FRAMES_TIMEOUT', 'LAB_PRUMO_NAO_COMPILADO',
+  'LAB_MCP_REVOGACAO_HANDSHAKE', 'LAB_PERFIL_EXTERNO_RECUSADO', 'LAB_PASTA_NAO_VINCULADA'
+]);
+
 /**
- * Linhas públicas e seguras dos cenários NÃO aprovados do E2E: só o identificador (caminho relativo de um arquivo .test.mjs do Lab),
- * a classificação e códigos técnicos em MAIÚSCULAS (ENOENT, ETIMEDOUT, CLAUDE_CODE_UNAVAILABLE...). Texto livre da evidência
- * (mensagem, pilha, caminho, trecho de código) nunca sai: o motivo é extraído por lista de padrões, não por limpeza do texto.
+ * Linhas públicas dos cenários NÃO aprovados do E2E: só nome da lista fechada, classificação e códigos da lista fechada.
+ * Texto livre da evidência (mensagem, pilha, caminho, trecho de código, valor) nunca é copiado.
  */
 export function casosNaoAprovados(texto) {
   let casos;
   try { casos = JSON.parse(texto)?.cases; } catch { return []; }
   if (!Array.isArray(casos)) return [];
-  const idSeguro = /^[a-z0-9._-]+(?:\/[a-z0-9._-]+){1,5}\.test\.mjs$/;
+  const conhecidos = new Set(CODIGOS_PUBLICOS);
   return casos.filter((c) => c && c.status !== 'PASS').slice(0, 20).map((c) => {
-    const id = typeof c.id === 'string' && c.id.length <= 160 && idSeguro.test(c.id) ? c.id : '<id fora do padrão permitido>';
+    const id = typeof c.id === 'string' && CENARIOS_PUBLICOS.has(c.id) ? c.id : '<cenário fora da lista>';
     const status = ['FAIL', 'BLOCKED', 'NOT_RUN'].includes(c.status) ? c.status : 'DESCONHECIDO';
-    const codigos = [...new Set(String(c.evidence ?? '').replace(/^rastreabilidade .*$/m, '').match(/\b(?:E[A-Z]{3,}|ERR_[A-Z_]+|[A-Z]{3,}(?:_[A-Z0-9]+)+)\b/g) ?? [])].slice(0, 3);
+    const codigos = [...new Set((String(c.evidence ?? '').replace(/^rastreabilidade .*$/m, '').match(/[A-Za-z0-9_]+/g) ?? []).filter((t) => conhecidos.has(t)))].slice(0, 3);
     return `  cenário ${status}: ${id}${codigos.length ? ` · motivo=${codigos.join(',')}` : ''}`;
   });
 }
