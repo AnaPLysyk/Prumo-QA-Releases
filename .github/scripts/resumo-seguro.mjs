@@ -114,9 +114,20 @@ export function casosNaoAprovados(texto) {
     const status = ['FAIL', 'BLOCKED', 'NOT_RUN'].includes(c.status) ? c.status : 'DESCONHECIDO';
     const codigos = [...new Set((String(c.evidence ?? '').replace(/^rastreabilidade .*$/m, '').match(/[A-Za-z0-9_]+/g) ?? []).filter((t) => conhecidos.has(t)))].slice(0, 3);
     const linha = `  cenário ${status}: ${id}${codigos.length ? ` · motivo=${codigos.join(',')}` : ''}`;
-    return [linha, ...subtestesReprovados(c.evidence).map((t) => `    subteste: ${t}`)].join('\n');
+    // Motivo (1ª linha do erro, mascarada) lido do trecho final da saída que o Lab guarda na evidência do caso.
+    const motivo = [...mensagensDasFalhas(String(c.evidence ?? '').split(/\r?\n/), limparTexto).values()][0];
+    return [linha, ...subtestesReprovados(c.evidence).map((t) => `    subteste: ${t}`), ...(motivo ? [`    erro: ${motivo}`] : [])].join('\n');
   });
 }
+
+/** Máscara do que pode sair no log público: caminhos, URLs, tokens e valores longos; no máximo 240 caracteres. */
+export const limparTexto = (texto) => String(texto)
+  .replace(/[\r\n%]/g, ' ')
+  .replace(/https?:\/\/[^\s'"]+/gi, '<url>')
+  .replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>')
+  .replace(/\b(?:bearer|token|secret|senha|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '<redigido>')
+  .replace(/\b[0-9a-f]{32,}\b/gi, '<valor>')
+  .slice(0, 240);
 
 /**
  * Motivo técnico de cada teste reprovado, por decisão da dona do repositório (25/11/2026): a primeira linha da mensagem de erro,
@@ -243,13 +254,7 @@ function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
     const valores = linhas.map((l) => new RegExp(`^(?:#|ℹ) ${nome} (\\d+)\\s*$`).exec(l)).filter(Boolean).map((m) => Number(m[1]));
     return valores.length ? valores.reduce((a, b) => a + b) : null;
   };
-  const seguro = (texto) => texto
-    .replace(/[\r\n%]/g, ' ')
-    .replace(/https?:\/\/[^\s'"]+/gi, '<url>')
-    .replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>')
-    .replace(/\b(?:bearer|token|secret|senha|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '<redigido>')
-    .replace(/\b[0-9a-f]{32,}\b/gi, '<valor>')
-    .slice(0, 240);
+  const seguro = limparTexto;
   // TAP: "not ok 1 - nome" · spec: "✖ nome (12.3ms)" — a linha "✖ failing tests:" é cabeçalho, e "⚠" é TODO.
   const falhasTap = linhas.map((l) => /^\s*not ok \d+ - (.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
   const falhasSpec = linhas

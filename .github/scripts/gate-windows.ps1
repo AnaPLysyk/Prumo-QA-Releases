@@ -90,3 +90,6 @@ if (NoGrupo 'pacote') {
 
   Executar 'Instalador NSIS final (instalar, abrir, E2E, reabrir)' nsis-final "node backend/aplicativo/homologacao/validar-pacote-instalado.mjs --formato nsis --pacote $($setup.FullName)"
 }
+# Chegar aqui é sucesso (qualquer falha já saiu antes). O Actions encerra o script com o último código de um programa nativo, que no grupo
+# e2e é 3 (BLOCKED do Claude Code, aceito): sem zerar, o job do E2E do Windows saía como falha mesmo com os 16 cenários corretos.
+$global:LASTEXITCODE = 0
