@@ -86,9 +86,23 @@ export const CODIGOS_PUBLICOS = Object.freeze([
   'LAB_MCP_REVOGACAO_HANDSHAKE', 'LAB_PERFIL_EXTERNO_RECUSADO', 'LAB_PASTA_NAO_VINCULADA'
 ]);
 
+/** Títulos de subtestes E2E autorizados a aparecer (lista fechada): dizem qual parte de um cenário grande falhou, sem mensagem nem dado. */
+export const SUBTESTES_PUBLICOS = Object.freeze(new Set([
+  'iniciante: monta, configura, salva, recupera, edita e confirma persistência em três tamanhos de janela',
+  'experiente: cliques rápidos, cancelamento, tema e redimensionamento no meio',
+  'o painel "Teste de QA" é etapa vigente e NÃO leva ao editor visual',
+  'geometria: nenhum bloco fica encoberto, fora da tela ou sem clique em três janelas e quatro estados',
+  'idioma: pt→en→pt com um fluxo em curso preserva blocos, conexões, agente, instrução, foco e teclado',
+  'biblioteca de fluxos: criar, salvar, reutilizar, editar e proteger o projeto na interface',
+  'a rotina única concluída continua consultável no dia e o reagendamento cria ocorrência nova sem tocar no histórico'
+]));
+const subtestesReprovados = (evidencia) => [...new Set(String(evidencia ?? '').split(/\r?\n/)
+  .map((l) => /^\s*(?:✖|not ok \d+ -) (.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(l)?.[1])
+  .filter((t) => t && SUBTESTES_PUBLICOS.has(t)))].slice(0, 6);
+
 /**
- * Linhas públicas dos cenários NÃO aprovados do E2E: só nome da lista fechada, classificação e códigos da lista fechada.
- * Texto livre da evidência (mensagem, pilha, caminho, trecho de código, valor) nunca é copiado.
+ * Linhas públicas dos cenários NÃO aprovados do E2E: só nome da lista fechada, classificação, códigos da lista fechada e
+ * títulos de subtestes da lista fechada. Texto livre da evidência (mensagem, pilha, caminho, trecho de código, valor) nunca é copiado.
  */
 export function casosNaoAprovados(texto) {
   let casos;
@@ -99,7 +113,8 @@ export function casosNaoAprovados(texto) {
     const id = typeof c.id === 'string' && CENARIOS_PUBLICOS.has(c.id) ? c.id : '<cenário fora da lista>';
     const status = ['FAIL', 'BLOCKED', 'NOT_RUN'].includes(c.status) ? c.status : 'DESCONHECIDO';
     const codigos = [...new Set((String(c.evidence ?? '').replace(/^rastreabilidade .*$/m, '').match(/[A-Za-z0-9_]+/g) ?? []).filter((t) => conhecidos.has(t)))].slice(0, 3);
-    return `  cenário ${status}: ${id}${codigos.length ? ` · motivo=${codigos.join(',')}` : ''}`;
+    const linha = `  cenário ${status}: ${id}${codigos.length ? ` · motivo=${codigos.join(',')}` : ''}`;
+    return [linha, ...subtestesReprovados(c.evidence).map((t) => `    subteste: ${t}`)].join('\n');
   });
 }
 
