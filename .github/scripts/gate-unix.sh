@@ -38,9 +38,11 @@ executar() {
 }
 # <<< executar
 # Linux: janela no Xvfb e cofre do GNOME destravado numa sessão D-Bus própria, como numa área de trabalho real.
+# XDG_CURRENT_DESKTOP=GNOME faz o Chromium escolher o gnome-keyring (libsecret) como cofre; sem isso ele cai em "basic_text", que o
+# Prumo recusa de propósito (token sem cofre real), e todo teste que conecta Qase, Jira ou GitHub falhava só no Linux.
 sessao() {
   if [ "$alvo" = "linux" ]; then
-    printf '%s' "dbus-run-session -- bash -c \"printf '' | gnome-keyring-daemon --unlock --components=secrets >/dev/null && xvfb-run -a -s '-screen 0 1440x900x24' $1\""
+    printf '%s' "dbus-run-session -- bash -c \"export XDG_CURRENT_DESKTOP=GNOME; printf '' | gnome-keyring-daemon --unlock --components=secrets >/dev/null && xvfb-run -a -s '-screen 0 1440x900x24' $1\""
   else printf '%s' "$1"; fi
 }
 
