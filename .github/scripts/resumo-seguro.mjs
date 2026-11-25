@@ -2,103 +2,194 @@
  * Resumo PÚBLICO de uma etapa que roda código privado no repositório público de distribuição.
  * Os logs de um repositório público são abertos a qualquer pessoa: o log completo da etapa nunca vai ao console.
  * Este script lê o arquivo de log (TAP ou spec do node:test, ou saída comum) e imprime só o que é seguro: rótulo,
- * código de saída, contagem de testes e o NOME dos testes que falharam. Nunca imprime mensagem de erro, pilha,
+ * estado, código de saída, contagens e o NOME dos testes que falharam. Nunca imprime mensagem de erro, pilha,
  * caminho, diff ou trecho de código. O Node ≥22 imprime spec por padrão mesmo sem TTY: sem ler esse formato o
  * resumo saía mudo (só rótulo e código), que foi o que aconteceu na homologação da v2.23.7.
- * Uso: node resumo-seguro.mjs <saida.log> <rótulo> <código-de-saída>
+ *
+ * CONTRATO DE ESTADOS (único lugar que decide; os gates só obedecem):
+ *   código 0                                  → PASS, só se nada na saída ou no resultado estruturado indicar falha;
+ *   código 3 na etapa "Lab e2e (...)"         → BLOCKED, só se o resultado estruturado comprovar que o ÚNICO caso bloqueado é o do
+ *                                               Claude Code com motivo CLAUDE_CODE_UNAVAILABLE e nenhum caso falhou;
+ *   qualquer outro código (3 fora do E2E também) → FAIL. FAIL sempre vence BLOCKED; BLOCKED nunca conta como PASS.
+ * Marcadores textuais soltos no log NÃO provam bloqueio: a prova é o resultado estruturado do Lab, vinculado à versão, aos dois SHAs,
+ * à plataforma e ao job desta execução.
+ *
+ * Uso:  node resumo-seguro.mjs <saida.log> <rótulo> <código-de-saída>
+ *       node resumo-seguro.mjs --validar-resultado <resultado.json> <atestado.json> <versão> <sha-prumo> <sha-lab> <plataforma> <job>
+ *       (a segunda forma sai com 0=PASS, 3=BLOCKED, 1=FAIL e grava o atestado só nos dois primeiros casos)
+ *       node resumo-seguro.mjs --validar-atestados <pasta-dos-atestados> <versão> <sha-prumo> <sha-lab> <id-da-execução>
+ *       (portão final antes de publicar; o atestado local autorizado, só PASS, vem em PRUMO_CLAUDE_LOCAL_ATTESTATION)
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 
-const argumentos = process.argv.slice(2);
-if (argumentos[0] === '--validar-resultado') {
-  const [, resultadoArquivo, atestadoArquivo, versao, codigoSha, labSha, plataforma, jobId = ''] = argumentos;
-  const casoClaude = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
-  const falhar = (mensagem) => { console.error(`Evidência externa inválida: ${mensagem}`); process.exit(1); };
-  if (!resultadoArquivo || !atestadoArquivo || !/^\d+\.\d+\.\d+$/.test(versao) || !/^[0-9a-f]{40}$/.test(codigoSha) || !/^[0-9a-f]{40}$/.test(labSha)) falhar('parâmetros');
+export const CASO_CLAUDE = 'e2e/frontend/aplicativo/claude-code-delegacao-real.test.mjs';
+export const MOTIVO_CLAUDE = 'CLAUDE_CODE_UNAVAILABLE';
+const ETAPA_E2E = /^Lab e2e \(/;
+
+/** Avalia o resultado estruturado do Lab para UM candidato exato. Nunca confia no log nem em marcador solto. */
+export function avaliarResultado(texto, { versao, codigoSha, labSha, plataforma, jobId }) {
+  const falha = (motivo, casos = []) => ({ estado: 'FAIL', motivo, contagem: contarCasos(casos), digest: null });
+  if (!/^\d+\.\d+\.\d+$/.test(versao ?? '') || !/^[0-9a-f]{40}$/.test(codigoSha ?? '') || !/^[0-9a-f]{40}$/.test(labSha ?? '') || !plataforma || !jobId) return falha('parâmetros do candidato ausentes ou inválidos');
   let resultado;
-  try { resultado = JSON.parse(fs.readFileSync(resultadoArquivo, 'utf8')); } catch { falhar('resultado ausente ou ilegível'); }
+  try { resultado = JSON.parse(texto); } catch { return falha('resultado ausente ou ilegível'); }
   const casos = Array.isArray(resultado?.cases) ? resultado.cases : [];
-  const caso = casos.find((item) => item?.id === casoClaude);
-  if (!caso) falhar('caso Claude Code ausente');
-  if (casos.some((item) => item?.status === 'FAIL')) falhar('falha genuína presente');
-  if (casos.some((item) => !['PASS', 'BLOCKED'].includes(item?.status))) falhar('resultado incompleto ou estado obrigatório não aprovado');
-  const bloqueados = casos.filter((item) => item?.status === 'BLOCKED');
-  if (bloqueados.some((item) => item.id !== casoClaude || !String(item.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE'))) falhar('BLOCKED não autorizado');
-  if (new Set(casos.map((item) => item?.id)).size !== casos.length) falhar('casos duplicados');
-  if (!['PASS', 'BLOCKED'].includes(caso.status)) falhar('status não aprovado');
-  if (caso.status === 'BLOCKED' && !String(caso.evidence ?? '').includes('CLAUDE_CODE_UNAVAILABLE')) falhar('motivo BLOCKED ausente');
-  if (caso.status === 'PASS' && bloqueados.length) falhar('há BLOCKED junto com PASS do Claude');
-  const rastreabilidade = String(caso.evidence ?? '').split('\n').find((linha) => linha.startsWith('rastreabilidade '));
-  let metadados;
-  try { metadados = rastreabilidade ? JSON.parse(rastreabilidade.slice('rastreabilidade '.length)) : null; } catch { metadados = null; }
-  if (!metadados || metadados.versao !== versao || metadados.codigo_sha !== codigoSha || metadados.lab_sha !== labSha || metadados.plataforma !== plataforma) falhar('rastreabilidade divergente ou incompleta');
-  const conteudo = fs.readFileSync(resultadoArquivo);
-  const atestado = {
-    schema: 'prumo-claude-attestation/v1',
-    source: 'runner',
-    versao,
-    status: caso.status,
-    reason: caso.status === 'BLOCKED' ? 'CLAUDE_CODE_UNAVAILABLE' : null,
-    caseId: casoClaude,
-    codigo_sha: codigoSha,
-    lab_sha: labSha,
-    plataforma,
-    jobId,
-    resultado_sha256: crypto.createHash('sha256').update(conteudo).digest('hex')
-  };
-  fs.writeFileSync(atestadoArquivo, JSON.stringify(atestado));
-  console.log(`Evidência externa ${caso.status}: ${plataforma}`);
-  process.exit(caso.status === 'BLOCKED' ? 3 : 0);
+  if (!casos.length) return falha('resultado sem casos');
+  if (resultado.jobId !== jobId) return falha('job divergente', casos);
+  if (!Array.isArray(resultado.ambientes) || resultado.ambientes[0]?.plataforma !== plataforma) return falha('plataforma divergente', casos);
+  if (casos.some((c) => typeof c?.id !== 'string' || !c.id)) return falha('caso sem identificação', casos);
+  if (new Set(casos.map((c) => c.id)).size !== casos.length) return falha('casos duplicados', casos);
+  // FAIL vence tudo: nenhum BLOCKED, por legítimo que seja, esconde uma falha genuína.
+  if (casos.some((c) => c.status === 'FAIL')) return falha('falha genuína presente', casos);
+  if (casos.some((c) => !['PASS', 'BLOCKED'].includes(c.status))) return falha('caso não executado ou com estado desconhecido', casos);
+  for (const c of casos) {
+    const linha = String(c.evidence ?? '').split('\n').find((l) => l.startsWith('rastreabilidade '));
+    let m = null;
+    try { m = linha ? JSON.parse(linha.slice('rastreabilidade '.length)) : null; } catch { m = null; }
+    if (!m || m.versao !== versao || m.codigo_sha !== codigoSha || m.lab_sha !== labSha || m.plataforma !== plataforma) return falha('rastreabilidade divergente ou ausente em ' + c.id.slice(0, 60), casos);
+  }
+  const claude = casos.find((c) => c.id === CASO_CLAUDE);
+  if (!claude) return falha('caso do Claude Code ausente', casos);
+  const bloqueados = casos.filter((c) => c.status === 'BLOCKED');
+  if (bloqueados.some((c) => c.id !== CASO_CLAUDE || !String(c.evidence ?? '').includes(MOTIVO_CLAUDE))) return falha('BLOCKED não autorizado', casos);
+  const digest = crypto.createHash('sha256').update(texto).digest('hex');
+  return { estado: bloqueados.length ? 'BLOCKED' : 'PASS', motivo: bloqueados.length ? MOTIVO_CLAUDE : null, contagem: contarCasos(casos), digest };
 }
 
-const [arquivo, rotulo = 'Etapa', codigoTexto = '1'] = argumentos;
-const codigo = Number(codigoTexto);
-const linhas = fs.existsSync(arquivo) ? fs.readFileSync(arquivo, 'utf8').split(/\r?\n/) : [];
-let resultadoEstruturado = null;
-if (process.env.PRUMO_RESULT_FILE && fs.existsSync(process.env.PRUMO_RESULT_FILE)) {
-  try { resultadoEstruturado = JSON.parse(fs.readFileSync(process.env.PRUMO_RESULT_FILE, 'utf8')); } catch { resultadoEstruturado = null; }
+export function contarCasos(casos) {
+  const por = (s) => casos.filter((c) => c?.status === s).length;
+  return { tests: casos.length, pass: por('PASS'), fail: por('FAIL'), blocked: por('BLOCKED'), not_run: por('NOT_RUN') };
 }
-const estadosEstruturados = Array.isArray(resultadoEstruturado?.cases) ? resultadoEstruturado.cases.map((item) => item?.status) : [];
-const falhaEstruturadaDoResultado = estadosEstruturados.includes('FAIL');
-const bloqueioEstruturadoDoResultado = estadosEstruturados.includes('BLOCKED');
-const contarReporter = (nome) => {
-  const valores = linhas.filter((linha) => {
-    const texto = linha.trim();
-    return texto.startsWith(`# ${nome} `) || texto.startsWith(`${String.fromCodePoint(0x2139)} ${nome} `) || texto.startsWith(`i ${nome} `);
-  }).map((linha) => Number(linha.trim().split(/\s+/).at(-1))).filter(Number.isFinite);
-  return valores.length ? valores.reduce((a, b) => a + b, 0) : null;
-};
-const contar = (nome) => {
-  // TAP: "# tests 12" · spec: "ℹ tests 12" (cada lote do runner privado imprime o próprio bloco; somam-se todos).
-  const valores = linhas.map((l) => new RegExp(`^(?:#|ℹ) ${nome} (\\d+)\\s*$`).exec(l)).filter(Boolean).map((m) => Number(m[1]));
-  return valores.length ? valores.reduce((a, b) => a + b) : null;
-};
-const seguro = (texto) => texto
-  .replace(/[\r\n%]/g, ' ')
-  .replace(/https?:\/\/[^\s'"]+/gi, '<url>')
-  .replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>')
-  .replace(/\b(?:bearer|token|secret|senha|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '<redigido>')
-  .replace(/\b[0-9a-f]{32,}\b/gi, '<valor>')
-  .slice(0, 160);
-// TAP: "not ok 1 - nome" · spec: "✖ nome (12.3ms)" — a linha "✖ failing tests:" é cabeçalho, e "⚠" é TODO.
-const falhasTap = linhas.map((l) => /^\s*not ok \d+ - (.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
-const falhasSpec = linhas
-  .map((l) => /^\s*✖ (?!failing tests:)(.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(l))
-  .filter(Boolean)
-  .map((m) => m[1]);
-const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 15);
-const marcadorClaude = linhas.some((linha) => /^\s*#\s*LAB_BLOCKED:\s*CLAUDE_CODE_UNAVAILABLE\s*$/.test(linha));
-const falhaEstruturada = falhas.length > 0 || linhas.some((linha) => /^(?:#|ℹ) fail [1-9]\d*\s*$/.test(linha.trim())) || falhaEstruturadaDoResultado;
-const bloqueado = codigo === 3 && (marcadorClaude || bloqueioEstruturadoDoResultado) && !falhaEstruturada;
-const estado = codigo === 0 && !marcadorClaude && !bloqueioEstruturadoDoResultado && !falhaEstruturada ? 'PASS' : bloqueado ? 'BLOCKED' : 'FAIL';
-const partes = [`${rotulo}: ${estado} (código ${codigo})`];
-for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo']) {
-  const valorBruto = contar(nome) ?? contarReporter(nome);
-  const valor = valorBruto;
-  if (valor !== null) partes.push(`${nome}=${valor}`);
+
+/** Decide o estado de UMA etapa a partir do código de saída, do log e (só no E2E autorizado) do resultado estruturado. */
+export function decidirEtapa({ rotulo, codigo, falhaNoLog = false, avaliacao = null }) {
+  if (ETAPA_E2E.test(rotulo)) {
+    if (!avaliacao) return 'FAIL';
+    if (avaliacao.estado === 'FAIL') return 'FAIL';
+    if (codigo === 0 && avaliacao.estado === 'PASS' && !falhaNoLog) return 'PASS';
+    if (codigo === 3 && avaliacao.estado === 'BLOCKED' && !falhaNoLog) return 'BLOCKED';
+    return 'FAIL';
+  }
+  return codigo === 0 && !falhaNoLog ? 'PASS' : 'FAIL';
 }
-if (bloqueado) partes.push('blocked=1 · approved_pass=0');
-console.log(partes.join(' · '));
-for (const nome of falhas) console.log(`  não passou: ${nome}`);
-if (estado !== 'PASS') console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se a chave autorizada existir.');
+
+function validarResultado(argumentos) {
+  const [resultadoArquivo, atestadoArquivo, versao, codigoSha, labSha, plataforma, jobId = ''] = argumentos;
+  let texto = '';
+  try { texto = fs.readFileSync(resultadoArquivo, 'utf8'); } catch { /* ausente: avaliarResultado reprova */ }
+  const av = avaliarResultado(texto, { versao, codigoSha, labSha, plataforma, jobId });
+  if (av.estado === 'FAIL') { console.error(`Evidência externa inválida: ${av.motivo}`); return 1; }
+  fs.writeFileSync(atestadoArquivo, JSON.stringify({
+    schema: 'prumo-claude-attestation/v1', source: 'runner', versao, status: av.estado, reason: av.motivo, caseId: CASO_CLAUDE,
+    codigo_sha: codigoSha, lab_sha: labSha, plataforma, jobId, contagem: av.contagem, resultado_sha256: av.digest,
+  }));
+  console.log(`Evidência externa ${av.estado}: ${plataforma}`);
+  return av.estado === 'BLOCKED' ? 3 : 0;
+}
+
+export const PLATAFORMAS = ['win32-x64', 'darwin-arm64', 'darwin-x64', 'linux-x64'];
+
+/** Portão final da publicação: as quatro plataformas precisam ter atestado desta execução e do mesmo candidato; sem PASS real do Claude Code, não publica. */
+export function validarAtestados(atestados, { versao, codigoSha, labSha, execucao }) {
+  const erros = [];
+  const vistos = new Set();
+  let pass = 0;
+  const hex64 = /^[0-9a-f]{64}$/;
+  for (const a of atestados) {
+    const origem = a?.source === 'local-authorized' ? 'local' : 'runner';
+    if (a?.schema !== 'prumo-claude-attestation/v1' || a.caseId !== CASO_CLAUDE || !hex64.test(a.resultado_sha256 ?? '')) { erros.push('atestado inválido'); continue; }
+    if (!['PASS', 'BLOCKED'].includes(a.status) || (a.status === 'BLOCKED' ? a.reason !== MOTIVO_CLAUDE : a.reason !== null)) { erros.push('status ou motivo inválido'); continue; }
+    if (a.versao !== versao || a.codigo_sha !== codigoSha || a.lab_sha !== labSha) { erros.push('atestado de outro candidato (versão ou SHA)'); continue; }
+    if (origem === 'local' && a.status !== 'PASS') { erros.push('a evidência local autorizada precisa ser PASS'); continue; }
+    if (origem === 'runner' && (!execucao || typeof a.jobId !== 'string' || !a.jobId.startsWith(execucao + '-'))) { erros.push('atestado de outra execução: ' + a.plataforma); continue; }
+    const identidade = origem + ':' + a.plataforma;
+    if (vistos.has(identidade)) { erros.push('atestado duplicado: ' + identidade); continue; }
+    vistos.add(identidade);
+    if (a.status === 'PASS') pass++;
+  }
+  for (const p of PLATAFORMAS) if (!vistos.has('runner:' + p)) erros.push('evidência ausente para ' + p);
+  if (!pass) erros.push('nenhum PASS real do Claude Code (somente BLOCKED): a publicação exige um PASS no runner ou o atestado local autorizado');
+  return { ok: !erros.length, erros: [...new Set(erros)], pass };
+}
+
+function validarAtestadosDaPasta([pasta, versao, codigoSha, labSha, execucao]) {
+  const atestados = [];
+  const erros = [];
+  const ler = (texto, nome) => { try { atestados.push(JSON.parse(texto)); } catch { erros.push('atestado ilegível: ' + nome); } };
+  if (pasta && fs.existsSync(pasta)) for (const nome of fs.readdirSync(pasta).filter((n) => n.endsWith('.json'))) ler(fs.readFileSync(`${pasta}/${nome}`, 'utf8'), nome);
+  if (process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION) ler(process.env.PRUMO_CLAUDE_LOCAL_ATTESTATION, 'local');
+  const veredito = validarAtestados(atestados, { versao, codigoSha, labSha, execucao });
+  erros.push(...veredito.erros);
+  if (erros.length) { for (const e of erros) console.error('Publicação bloqueada: ' + e); return 1; }
+  console.log(`Evidências do Claude Code validadas: ${atestados.length} atestado(s), ${veredito.pass} PASS real; BLOCKED externo aceito só onde o PASS não foi possível.`);
+  return 0;
+}
+
+function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
+  const codigo = Number(codigoTexto);
+  const linhas = fs.existsSync(arquivo) ? fs.readFileSync(arquivo, 'utf8').split(/\r?\n/) : [];
+  // O node:test usa dois formatos: TAP ("# tests 10") e o reporter legível ("ℹ tests 10"). Ambos são contados sem expor a saída privada.
+  const contarReporter = (nome) => {
+    const valores = linhas.filter((linha) => {
+      const texto = linha.trim();
+      return texto.startsWith(`# ${nome} `) || texto.startsWith(`${String.fromCodePoint(0x2139)} ${nome} `) || texto.startsWith(`i ${nome} `);
+    }).map((linha) => Number(linha.trim().split(/\s+/).at(-1))).filter(Number.isFinite);
+    return valores.length ? valores.reduce((a, b) => a + b, 0) : null;
+  };
+  const contar = (nome) => {
+    // TAP: "# tests 12" · spec: "ℹ tests 12" (cada lote do runner privado imprime o próprio bloco; somam-se todos).
+    const valores = linhas.map((l) => new RegExp(`^(?:#|ℹ) ${nome} (\\d+)\\s*$`).exec(l)).filter(Boolean).map((m) => Number(m[1]));
+    return valores.length ? valores.reduce((a, b) => a + b) : null;
+  };
+  const seguro = (texto) => texto
+    .replace(/[\r\n%]/g, ' ')
+    .replace(/https?:\/\/[^\s'"]+/gi, '<url>')
+    .replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>')
+    .replace(/\b(?:bearer|token|secret|senha|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '<redigido>')
+    .replace(/\b[0-9a-f]{32,}\b/gi, '<valor>')
+    .slice(0, 160);
+  // TAP: "not ok 1 - nome" · spec: "✖ nome (12.3ms)" — a linha "✖ failing tests:" é cabeçalho, e "⚠" é TODO.
+  const falhasTap = linhas.map((l) => /^\s*not ok \d+ - (.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
+  const falhasSpec = linhas
+    .map((l) => /^\s*✖ (?!failing tests:)(.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(l))
+    .filter(Boolean)
+    .map((m) => m[1]);
+  const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 15);
+  const falhaNoLog = falhas.length > 0 || linhas.some((l) => /^(?:#|ℹ) (?:fail|cancelled) [1-9]\d*\s*$/.test(l.trim()));
+
+  // Só a etapa "Lab e2e (...)" tem resultado estruturado; nas demais o arquivo (se existir no ambiente) é ignorado.
+  let avaliacao = null; let contagemEstruturada = null;
+  if (ETAPA_E2E.test(rotulo)) {
+    let texto = '';
+    try { texto = fs.readFileSync(process.env.PRUMO_RESULT_FILE ?? '', 'utf8'); } catch { /* ausente: a etapa reprova */ }
+    avaliacao = avaliarResultado(texto, {
+      versao: process.env.VERSAO, codigoSha: process.env.CODIGO_SHA, labSha: process.env.LAB_SHA,
+      plataforma: `${process.platform}-${process.arch}`, jobId: process.env.PRUMO_JOB_ID,
+    });
+    try { contagemEstruturada = contarCasos(JSON.parse(texto).cases); } catch { contagemEstruturada = null; }
+  }
+  const estado = decidirEtapa({ rotulo, codigo, falhaNoLog, avaliacao });
+  const partes = [`${rotulo}: ${estado} (código ${codigo})`];
+  if (contagemEstruturada) {
+    // Contagem por caso, sem misturar com o TAP bruto: um caso BLOCKED aparece como blocked, nunca dentro de pass.
+    for (const [nome, valor] of Object.entries(contagemEstruturada)) partes.push(`${nome}=${valor}`);
+  } else {
+    for (const nome of ['tests', 'pass', 'fail', 'skipped', 'cancelled', 'todo']) {
+      const valor = contar(nome) ?? contarReporter(nome);
+      if (valor !== null) partes.push(`${nome}=${valor}`);
+    }
+  }
+  if (estado === 'BLOCKED') partes.push(`motivo=${MOTIVO_CLAUDE}`);
+  console.log(partes.join(' · '));
+  if (avaliacao && estado === 'FAIL' && avaliacao.estado === 'FAIL') console.log(`  evidência estruturada reprovada: ${seguro(avaliacao.motivo)}`);
+  for (const nome of falhas) console.log(`  não passou: ${nome}`);
+  if (estado !== 'PASS') console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se a chave pública de cifra estiver configurada.');
+}
+
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(fileURLToPath(import.meta.url))) {
+  const [primeiro, ...resto] = process.argv.slice(2);
+  if (primeiro === '--validar-resultado') process.exit(validarResultado(resto));
+  if (primeiro === '--validar-atestados') process.exit(validarAtestadosDaPasta(resto));
+  resumir(process.argv.slice(2));
+}
