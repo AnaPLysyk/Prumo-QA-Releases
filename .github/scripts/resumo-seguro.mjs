@@ -201,7 +201,7 @@ function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
     .map((l) => /^\s*✖ (?!failing tests:)(.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(l))
     .filter(Boolean)
     .map((m) => m[1]);
-  const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 15);
+  const falhas = [...new Set([...falhasTap, ...falhasSpec].map(seguro))].slice(0, 100);
   const falhaNoLog = falhas.length > 0 || linhas.some((l) => /^(?:#|ℹ) (?:fail|cancelled) [1-9]\d*\s*$/.test(l.trim()));
 
   // Só a etapa "Lab e2e (...)" tem resultado estruturado; nas demais o arquivo (se existir no ambiente) é ignorado.
