@@ -2,9 +2,17 @@
 # Gate canônico de macOS (arm64 e Intel) e Linux no repositório PÚBLICO de distribuição: smoke, integração, E2E,
 # instaladores, executável empacotado e
 # validação dos pacotes finais), cada um com a saída fora do log público (executar-silencioso.mjs).
-# Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux
+# Uso (dentro da pasta "codigo"): bash gate-unix.sh mac|linux [grupo [fatia total]]
+# Grupos (rodam em jobs paralelos; "tudo", o padrão, roda todos em sequência, como antes):
+#   base      tipos, unitários, qualidade, OAuth, plataforma, conexões, smoke e integração do Lab
+#   e2e       E2E do Lab (com o atestado do Claude Code)
+#   regressao regressão do Lab; "fatia total" divide as áreas em partes calculadas a partir da lista real do Lab
+#   pacote    instalador, executável empacotado, checksums e validação dos pacotes finais
 set -uo pipefail
-alvo="${1:?Uso: gate-unix.sh mac|linux}"
+alvo="${1:?Uso: gate-unix.sh mac|linux [grupo [fatia total]]}"
+grupo="${2:-tudo}"; fatia="${3:-1}"; total="${4:-1}"
+case "$grupo" in tudo|base|e2e|regressao|pacote) ;; *) echo "grupo inválido: $grupo"; exit 2 ;; esac
+no_grupo() { [ "$grupo" = tudo ] || [ "$grupo" = "$1" ]; }
 silencioso="$GITHUB_WORKSPACE/publico/.github/scripts/executar-silencioso.mjs"
 resumo="$GITHUB_WORKSPACE/publico/.github/scripts/resumo-seguro.mjs"
 # Sem "set -e" de propósito: os códigos de saída são tratados um a um (0=PASS, 3=BLOCKED só no E2E autorizado, resto=FAIL).
@@ -49,14 +57,30 @@ fi
 executar 'npm ci' npm-ci 'npm ci'
 executar 'Runtime Electron' electron-install 'node node_modules/electron/install.js'
 executar 'Dependências do servidor Better Auth' better-auth 'npm ci --prefix backend/login/servidor --omit=dev'
-executar 'Tipos' typecheck 'npm run typecheck'
+if no_grupo base; then
+  executar 'Tipos' typecheck 'npm run typecheck'
+fi
 executar 'Compilação' build 'npm run build'
-executar 'Testes unitários' unitarios 'npm run test:unitarios'
-executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci 'npm run qualidade:ci'
-executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
-executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
-executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
+if no_grupo base; then
+  executar 'Testes unitários' unitarios 'npm run test:unitarios'
+  executar 'Quality do Prumo (regras e agentes, sem duplicar testes)' quality-ci 'npm run qualidade:ci'
+  executar 'Contrato OAuth multiplataforma' oauth-broker 'node --test docs/prototipos/integracoes-universais/oauth-broker.test.mjs'
+  executar 'Testes de plataforma' plataforma 'node --test --test-concurrency=1 testes/unitario/backend/aplicativo/multiplataforma.test.mjs testes/unitario/backend/testes/aprovacao-multiplataforma.test.mjs'
+  executar 'Conexões pelo navegador (GitHub App e Jira OAuth)' conexoes 'node --test --test-concurrency=1 testes/unitario/backend/projetos/autorizacao-no-servidor.test.mjs testes/unitario/backend/projetos/autorizacao-pelo-navegador.test.mjs testes/unitario/backend/projetos/cliente-do-servico-de-autorizacao.test.mjs testes/unitario/backend/projetos/contas-oauth.test.mjs'
+fi
 for tipo in smoke integracao e2e regressao; do
+  case "$tipo" in smoke|integracao) no_grupo base || continue ;; *) no_grupo "$tipo" || continue ;; esac
+  if [ "$tipo" = regressao ] && [ "$grupo" = regressao ]; then
+    # Fatia da regressão: as áreas vêm da lista real do Lab (nenhum teste fica de fora); todas rodam mesmo se uma falhar, para a rodada trazer toda a informação.
+    areas=$(node "$GITHUB_WORKSPACE/publico/.github/scripts/fatia-regressao.mjs" "$fatia" "$total") || exit 1
+    echo "Regressão do Lab, fatia $fatia de $total ($(echo "$areas" | wc -w | tr -d ' ') áreas)"
+    falhou=0
+    for area in $areas; do
+      node "$silencioso" "Lab regressao ($alvo $(node -p process.arch)) fatia $fatia/$total" "lab-regressao-${area//\//-}" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo regressao --area $area")" || falhou=1
+    done
+    [ "$falhou" -eq 0 ] || { echo "::error::Lab regressao (fatia $fatia/$total) reprovado em uma ou mais áreas."; exit 1; }
+    continue
+  fi
   if [ "$tipo" = e2e ]; then
     export PRUMO_RESULT_FILE="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/lab-e2e-result-${alvo}-$(node -p process.arch).json"
     export PRUMO_CLAUDE_ATTESTATION="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/claude-evidence-${alvo}-$(node -p process.arch).json"
@@ -66,6 +90,7 @@ for tipo in smoke integracao e2e regressao; do
   executar "Lab $tipo ($alvo $(node -p process.arch))" "lab-$tipo" "$(sessao "node tmp/lab/automacao/prumo-qa/executar.mjs --qa . --tipo $tipo")"
   if [ "$tipo" = e2e ]; then unset PRUMO_RESULT_FILE PRUMO_CLAUDE_ATTESTATION PRUMO_JOB_ID; fi
 done
+if ! no_grupo pacote; then exit 0; fi
 executar "Instaladores ($alvo)" dist "npm run dist:$alvo"
 
 if [ "$alvo" = "mac" ]; then
