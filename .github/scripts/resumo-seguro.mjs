@@ -57,6 +57,24 @@ export function avaliarResultado(texto, { versao, codigoSha, labSha, plataforma,
   return { estado: bloqueados.length ? 'BLOCKED' : 'PASS', motivo: bloqueados.length ? MOTIVO_CLAUDE : null, contagem: contarCasos(casos), digest };
 }
 
+/**
+ * Linhas públicas e seguras dos cenários NÃO aprovados do E2E: só o identificador (caminho relativo de um arquivo .test.mjs do Lab),
+ * a classificação e códigos técnicos em MAIÚSCULAS (ENOENT, ETIMEDOUT, CLAUDE_CODE_UNAVAILABLE...). Texto livre da evidência
+ * (mensagem, pilha, caminho, trecho de código) nunca sai: o motivo é extraído por lista de padrões, não por limpeza do texto.
+ */
+export function casosNaoAprovados(texto) {
+  let casos;
+  try { casos = JSON.parse(texto)?.cases; } catch { return []; }
+  if (!Array.isArray(casos)) return [];
+  const idSeguro = /^[a-z0-9._-]+(?:\/[a-z0-9._-]+){1,5}\.test\.mjs$/;
+  return casos.filter((c) => c && c.status !== 'PASS').slice(0, 20).map((c) => {
+    const id = typeof c.id === 'string' && c.id.length <= 160 && idSeguro.test(c.id) ? c.id : '<id fora do padrão permitido>';
+    const status = ['FAIL', 'BLOCKED', 'NOT_RUN'].includes(c.status) ? c.status : 'DESCONHECIDO';
+    const codigos = [...new Set(String(c.evidence ?? '').replace(/^rastreabilidade .*$/m, '').match(/\b(?:E[A-Z]{3,}|ERR_[A-Z_]+|[A-Z]{3,}(?:_[A-Z0-9]+)+)\b/g) ?? [])].slice(0, 3);
+    return `  cenário ${status}: ${id}${codigos.length ? ` · motivo=${codigos.join(',')}` : ''}`;
+  });
+}
+
 export function contarCasos(casos) {
   const por = (s) => casos.filter((c) => c?.status === s).length;
   return { tests: casos.length, pass: por('PASS'), fail: por('FAIL'), blocked: por('BLOCKED'), not_run: por('NOT_RUN') };
@@ -184,6 +202,13 @@ function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
   console.log(partes.join(' · '));
   if (avaliacao && estado === 'FAIL' && avaliacao.estado === 'FAIL') console.log(`  evidência estruturada reprovada: ${seguro(avaliacao.motivo)}`);
   for (const nome of falhas) console.log(`  não passou: ${nome}`);
+  if (ETAPA_E2E.test(rotulo) && estado !== 'PASS') {
+    let estruturado = '';
+    try { estruturado = fs.readFileSync(process.env.PRUMO_RESULT_FILE ?? '', 'utf8'); } catch { /* sem resultado: nada a detalhar */ }
+    for (const linha of casosNaoAprovados(estruturado)) console.log(linha);
+    const curto = (v) => (/^[0-9a-f]{40}$/.test(v ?? '') ? v.slice(0, 8) : '?');
+    console.log(`  rastreio: versão=${/^\d+\.\d+\.\d+$/.test(process.env.VERSAO ?? '') ? process.env.VERSAO : '?'} · prumo=${curto(process.env.CODIGO_SHA)} · lab=${curto(process.env.LAB_SHA)} · plataforma=${process.platform}-${process.arch} · execução=${/^\d{1,20}$/.test(process.env.GITHUB_RUN_ID ?? '') ? process.env.GITHUB_RUN_ID : '?'}`);
+  }
   if (estado !== 'PASS') console.log('  O log completo contém código privado e não é exibido aqui; ele só sai cifrado, se a chave pública de cifra estiver configurada.');
 }
 
