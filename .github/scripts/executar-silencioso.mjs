@@ -17,7 +17,16 @@ if (!rotulo || !nomeDoLog || !comando || !pasta) {
 fs.mkdirSync(pasta, { recursive: true });
 const log = path.join(pasta, `${nomeDoLog.replace(/[^\w.-]/g, '_')}.log`);
 const descritor = fs.openSync(log, 'a');
-const resultado = spawnSync(comando, { shell: true, stdio: ['ignore', descritor, descritor], env: process.env });
+// Só as etapas de instalação de dependências repetem (até 3 vezes): são seguras de refazer e a falha delas, em geral, é rede do runner
+// (registro npm ou download do Electron) quando dezenas de jobs instalam ao mesmo tempo. Teste, build e demais etapas nunca repetem.
+const repetiveis = /^(npm-ci|electron-install|better-auth)$/;
+const tentativas = repetiveis.test(nomeDoLog) ? 3 : 1;
+let resultado;
+for (let tentativa = 1; tentativa <= tentativas; tentativa++) {
+  resultado = spawnSync(comando, { shell: true, stdio: ['ignore', descritor, descritor], env: process.env });
+  if ((resultado.status ?? 1) === 0) break;
+  if (tentativa < tentativas) { console.log(`${rotulo}: falhou (tentativa ${tentativa} de ${tentativas}); repetindo.`); spawnSync(process.execPath, ['-e', 'setTimeout(() => {}, 5000)']); }
+}
 fs.closeSync(descritor);
 const codigo = resultado.status ?? 1;
 execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), 'resumo-seguro.mjs'), log, rotulo, String(codigo)], { stdio: 'inherit' });
