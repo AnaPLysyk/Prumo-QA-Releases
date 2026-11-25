@@ -118,6 +118,29 @@ export function casosNaoAprovados(texto) {
   });
 }
 
+/**
+ * Motivo técnico de cada teste reprovado, por decisão da dona do repositório (25/11/2026): a primeira linha da mensagem de erro,
+ * já passada por `limpar` (que mascara caminhos, URLs, tokens e valores longos) e limitada a 220 caracteres.
+ * Devolve Map(título → mensagem). Pilha, código-fonte e blocos inteiros do log continuam sem sair.
+ */
+export function mensagensDasFalhas(linhas, limpar = (t) => t) {
+  const mensagens = new Map();
+  for (let i = 0; i < linhas.length; i++) {
+    const m = /^\s*✖ (?!failing tests:)(.+?)(?: \(\d+(?:\.\d+)?m?s\))?\s*$/.exec(linhas[i]);
+    if (!m) continue;
+    const titulo = limpar(m[1]);
+    if (mensagens.has(titulo)) continue;
+    for (let j = i + 1; j < linhas.length && j < i + 40; j++) {
+      if (/^\s*(?:✖|✔|ℹ|▶|test at )/.test(linhas[j])) break;
+      const texto = linhas[j].trim();
+      if (!texto || /^at\s/.test(texto) || /^(?:generatedMessage|code|actual|expected|operator|stack):/.test(texto)) continue;
+      mensagens.set(titulo, limpar(texto.replace(/^(?:\w*Error(?: \[[\w_]+\])?|Error):\s*/, '')).slice(0, 240));
+      break;
+    }
+  }
+  return mensagens;
+}
+
 export function contarCasos(casos) {
   const por = (s) => casos.filter((c) => c?.status === s).length;
   return { tests: casos.length, pass: por('PASS'), fail: por('FAIL'), blocked: por('BLOCKED'), not_run: por('NOT_RUN') };
@@ -209,7 +232,7 @@ function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
     .replace(/[A-Za-z]:[\\/][^\s'"]*|\/(?:home|Users|Applications|opt|tmp|var)\/[^\s'"]*/g, '<caminho>')
     .replace(/\b(?:bearer|token|secret|senha|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi, '<redigido>')
     .replace(/\b[0-9a-f]{32,}\b/gi, '<valor>')
-    .slice(0, 160);
+    .slice(0, 240);
   // TAP: "not ok 1 - nome" · spec: "✖ nome (12.3ms)" — a linha "✖ failing tests:" é cabeçalho, e "⚠" é TODO.
   const falhasTap = linhas.map((l) => /^\s*not ok \d+ - (.+)$/.exec(l)).filter(Boolean).map((m) => m[1]);
   const falhasSpec = linhas
@@ -244,7 +267,11 @@ function resumir([arquivo, rotulo = 'Etapa', codigoTexto = '1']) {
   if (estado === 'BLOCKED') partes.push(`motivo=${MOTIVO_CLAUDE}`);
   console.log(partes.join(' · '));
   if (avaliacao && estado === 'FAIL' && avaliacao.estado === 'FAIL') console.log(`  evidência estruturada reprovada: ${seguro(avaliacao.motivo)}`);
-  for (const nome of falhas) console.log(`  não passou: ${nome}`);
+  const motivos = mensagensDasFalhas(linhas, seguro);
+  for (const nome of falhas) {
+    console.log(`  não passou: ${nome}`);
+    if (motivos.has(nome)) console.log(`    erro: ${motivos.get(nome)}`);
+  }
   if (ETAPA_E2E.test(rotulo) && estado !== 'PASS') {
     let estruturado = '';
     try { estruturado = fs.readFileSync(process.env.PRUMO_RESULT_FILE ?? '', 'utf8'); } catch { /* sem resultado: nada a detalhar */ }
